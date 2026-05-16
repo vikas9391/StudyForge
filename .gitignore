@@ -1,0 +1,124 @@
+# =========================================================
+# Combined .gitignore for Django Backend + Flutter App
+# =========================================================
+
+# =========================================================
+# GENERAL
+# =========================================================
+*.log
+*.tmp
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+
+# =========================================================
+# PYTHON / DJANGO
+# =========================================================
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual environments
+venv/
+env/
+.venv/
+ENV/
+
+# Python packaging
+build/
+dist/
+*.egg-info/
+.eggs/
+
+# Django stuff
+db.sqlite3
+db.sqlite3-journal
+media/
+staticfiles/
+
+# Environment variables
+.env
+.env.*
+!.env.example
+
+# Migrations cache
+**/__pycache__/
+
+# Test & coverage
+.coverage
+htmlcov/
+.pytest_cache/
+.mypy_cache/
+
+# IDE files
+.idea/
+.vscode/
+*.iml
+
+# =========================================================
+# FLUTTER / DART
+# =========================================================
+.dart_tool/
+.flutter-plugins
+.flutter-plugins-dependencies
+.packages
+.pub/
+build/
+
+# Flutter generated files
+**/generated_plugin_registrant.dart
+
+# Android
+android/.gradle/
+android/app/debug/
+android/app/profile/
+android/app/release/
+android/local.properties
+android/key.properties
+*.jks
+*.keystore
+
+# iOS
+ios/Pods/
+ios/.symlinks/
+ios/Flutter/Flutter.framework
+ios/Flutter/App.framework
+ios/Flutter/Generated.xcconfig
+ios/Flutter/flutter_export_environment.sh
+ios/ServiceDefinitions.json
+ios/Runner.xcworkspace/
+
+# macOS
+macos/Pods/
+
+# Linux
+linux/flutter/ephemeral/
+
+# Windows
+windows/flutter/ephemeral/
+
+# Web
+web/.dart_tool/
+
+# Test outputs
+coverage/
+
+# =========================================================
+# SECRETS
+# =========================================================
+*.pem
+*.p12
+*.key
+*.crt
+
+# Firebase
+google-services.json
+GoogleService-Info.plist
+
+# =========================================================
+# OPTIONAL UPLOADS
+# =========================================================
+uploads/
+tmp/
+cache/
