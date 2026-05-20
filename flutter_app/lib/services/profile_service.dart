@@ -1,6 +1,5 @@
 // lib/services/profile_service.dart
 // Handles all profile and admin API calls.
-// Uses 'diolib' prefix to avoid MultipartFile conflict with package:http.
 
 import 'package:dio/dio.dart' as diolib;
 import 'package:flutter_dotenv/flutter_dotenv.dart';
@@ -37,12 +36,22 @@ class ProfileService {
     }
   }
 
-  Future<UserProfile> updateProfile(String userId,
-      {String? fullName, String? bio}) async {
+  /// Update name, bio, and/or phone. Pass null to leave a field unchanged.
+  Future<UserProfile> updateProfile(
+      String userId, {
+        String? fullName,
+        String? bio,
+        String? phone,       // ← NEW
+        String? avatarUrl,
+      }) async {
     try {
       final body = <String, dynamic>{};
-      if (fullName != null) body['full_name'] = fullName;
-      if (bio != null)      body['bio']       = bio;
+      if (fullName  != null) body['full_name']  = fullName;
+      if (bio       != null) body['bio']        = bio;
+      if (phone     != null) body['phone']      = phone;     // ← NEW
+      if (avatarUrl != null) body['avatar_url'] = avatarUrl;
+
+      if (body.isEmpty) throw 'Nothing to update.';
 
       final r = await _dio.put('/profile/$userId', data: body);
       return UserProfile.fromJson(

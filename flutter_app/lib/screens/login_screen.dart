@@ -1,13 +1,13 @@
 // lib/screens/login_screen.dart
 // Premium animated login & sign-up screen using Supabase Auth.
+// Navigation to HomeScreen is handled by the StreamBuilder in main.dart —
+// do NOT push HomeScreen manually here.
 
 import 'package:flutter/material.dart';
 import 'package:flutter_animate/flutter_animate.dart';
 import '../core/constants.dart';
 import '../services/auth_service.dart';
 import '../widgets/sf_logo.dart';
-import '../main.dart' show fadeRoute;
-import 'home_screen.dart';
 
 class LoginScreen extends StatefulWidget {
   const LoginScreen({super.key});
@@ -50,10 +50,11 @@ class _LoginScreenState extends State<LoginScreen> {
           password: _passwordCtrl.text.trim(),
         );
       }
-      if (!mounted) return;
-      Navigator.of(context).pushReplacement(fadeRoute(const HomeScreen()));
+      // Do NOT navigate manually here.
+      // The StreamBuilder in main.dart listens to onAuthStateChange and
+      // will automatically swap to HomeScreen once the session is set.
     } catch (e) {
-      setState(() => _error = e.toString());
+      if (mounted) setState(() => _error = e.toString());
     } finally {
       if (mounted) setState(() => _loading = false);
     }
@@ -193,37 +194,37 @@ class _LoginScreenState extends State<LoginScreen> {
                               boxShadow: _loading
                                   ? []
                                   : [
-                                      BoxShadow(
-                                        color:      AppColors.primaryGlow,
-                                        blurRadius: 18,
-                                        offset:     const Offset(0, 6),
-                                      ),
-                                    ],
+                                BoxShadow(
+                                  color:      AppColors.primaryGlow,
+                                  blurRadius: 18,
+                                  offset:     const Offset(0, 6),
+                                ),
+                              ],
                             ),
                             child: Center(
                               child: _loading
                                   ? const SizedBox(
-                                      width: 22, height: 22,
-                                      child: CircularProgressIndicator(
-                                        color:       Colors.white,
-                                        strokeWidth: 2.5,
-                                      ),
-                                    )
+                                width: 22, height: 22,
+                                child: CircularProgressIndicator(
+                                  color:       Colors.white,
+                                  strokeWidth: 2.5,
+                                ),
+                              )
                                   : Row(
-                                      mainAxisSize: MainAxisSize.min,
-                                      children: [
-                                        const Icon(Icons.bolt_rounded,
-                                            color: Colors.white, size: 20),
-                                        const SizedBox(width: 8),
-                                        Text(
-                                          _isLogin ? 'Sign In' : 'Create Account',
-                                          style: AppText.body.copyWith(
-                                            color:      Colors.white,
-                                            fontWeight: FontWeight.w700,
-                                          ),
-                                        ),
-                                      ],
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  const Icon(Icons.bolt_rounded,
+                                      color: Colors.white, size: 20),
+                                  const SizedBox(width: 8),
+                                  Text(
+                                    _isLogin ? 'Sign In' : 'Create Account',
+                                    style: AppText.body.copyWith(
+                                      color:      Colors.white,
+                                      fontWeight: FontWeight.w700,
                                     ),
+                                  ),
+                                ],
+                              ),
                             ),
                           ),
                         ),

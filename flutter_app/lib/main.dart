@@ -19,9 +19,9 @@ void main() async {
 
   // Make status bar transparent so the gradient bleeds through
   SystemChrome.setSystemUIOverlayStyle(const SystemUiOverlayStyle(
-    statusBarColor:           Colors.transparent,
-    statusBarBrightness:      Brightness.dark,
-    statusBarIconBrightness:  Brightness.light,
+    statusBarColor:          Colors.transparent,
+    statusBarBrightness:     Brightness.dark,
+    statusBarIconBrightness: Brightness.light,
   ));
 
   // Load .env file
@@ -49,11 +49,13 @@ class StudyforgeApp extends StatelessWidget {
       debugShowCheckedModeBanner: false,
       theme:                      buildAppTheme(),
 
-      // Auth gate: react to Supabase session changes in real time
+      // Auth gate: react to Supabase session changes in real time.
+      // ALL navigation after login/logout is handled here — never manually
+      // push HomeScreen or LoginScreen from within those screens.
       home: StreamBuilder<AuthState>(
         stream: supabase.auth.onAuthStateChange,
         builder: (context, snapshot) {
-          // Still waiting for Supabase to respond
+          // Still waiting for Supabase to restore the persisted session
           if (snapshot.connectionState == ConnectionState.waiting) {
             return const _SplashScreen();
           }

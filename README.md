@@ -19,7 +19,7 @@ studyforge_v2/
 │   │   ├── auth.py          # signup / signin / signout
 │   │   ├── upload.py        # file upload + text extraction
 │   │   ├── process.py       # AI generation
-│   │   ├── results.py       # fetch results
+│   │   ├── results.py       # fetch / delete / rename / retry  ← UPDATED
 │   │   └── profile.py       # profile CRUD + admin endpoints
 │   └── utils/
 │       ├── supabase_client.py
@@ -28,29 +28,29 @@ studyforge_v2/
 │       └── ai_generator.py
 │
 └── flutter_app/
-    ├── pubspec.yaml
+    ├── pubspec.yaml                          ← UPDATED (2 new packages)
     ├── .env.example
     └── lib/
         ├── main.dart
         ├── core/constants.dart
         ├── models/
         │   ├── study_result.dart
-        │   └── profile.dart          ← NEW
+        │   └── profile.dart
         ├── services/
         │   ├── auth_service.dart
-        │   ├── api_service.dart
-        │   └── profile_service.dart  ← NEW
+        │   ├── api_service.dart              ← UPDATED (rename + retry)
+        │   └── profile_service.dart
         ├── widgets/sf_logo.dart
         └── screens/
             ├── login_screen.dart
-            ├── home_screen.dart      (updated — profile + admin buttons)
-            ├── upload_screen.dart
-            ├── results_screen.dart
-            ├── profile_screen.dart   ← NEW
+            ├── home_screen.dart              ← UPDATED
+            ├── upload_screen.dart            ← UPDATED
+            ├── results_screen.dart           ← UPDATED
+            ├── profile_screen.dart
             └── admin/
-                ├── admin_dashboard_screen.dart    ← NEW
-                ├── admin_users_screen.dart        ← NEW
-                └── admin_user_detail_screen.dart  ← NEW
+                ├── admin_dashboard_screen.dart
+                ├── admin_users_screen.dart
+                └── admin_user_detail_screen.dart
 ```
 
 ---
@@ -82,6 +82,7 @@ create table if not exists results (
     id          uuid primary key default gen_random_uuid(),
     user_id     text not null,
     file_url    text,
+    file_name   text default '',
     summary     text,
     quiz        jsonb default '[]',
     flashcards  jsonb default '[]',
@@ -95,6 +96,11 @@ create policy "Users manage own results"
 create index if not exists results_user_id_idx
     on results (user_id, created_at desc);
 ```
+
+> ⚠️ If you already created this table without the `file_name` column, add it with:
+> ```sql
+> alter table results add column if not exists file_name text default '';
+> ```
 
 **Script 2 — `supabase_profiles_admin.sql`** (profiles table + trigger):
 ```sql
@@ -192,11 +198,51 @@ flutter run
 | Feature | Description |
 |---------|-------------|
 | **Auth** | Email/password sign up & sign in via Supabase |
-| **Dashboard** | Stats (sessions, questions, flashcards), recent sessions |
-| **Upload** | PDF/DOCX upload with animated progress |
-| **AI Study Materials** | Summary, MCQ quiz, flip flashcards |
+| **Dashboard** | Stats (sessions, questions, flashcards) with animated number roll |
+| **Upload** | PDF/DOCX upload with drag-and-drop + animated step progress |
+| **AI Study Materials** | Summary, MCQ quiz with score tracker, 3D flip flashcards |
 | **Profile** | Edit name & bio, view account info |
-| **History** | Full list of past study sessions with dates |
+| **History** | Sessions grouped by date with search/filter |
+
+### Dashboard Features (home_screen)
+| Feature | Description |
+|---------|-------------|
+| **Animated stat cards** | Numbers roll from 0 → value on load (TweenAnimationBuilder) |
+| **Reactive greeting** | Updates every minute on hour boundary (Good morning / afternoon / evening) |
+| **Last synced timestamp** | Shows "Synced 2m ago" below the header |
+| **Search & filter** | Live client-side search across session names and summaries |
+| **Grouped sessions** | Sessions bucketed into This week / This month / Older |
+| **Long-press context menu** | Hold any tile → Rename or Delete |
+| **Swipe to delete** | Swipe left on any tile to delete with confirmation |
+| **Rename sessions** | Rename dialog syncs to backend via PATCH /results/{id} |
+| **Retry failed sessions** | Pending tiles show a Retry button — re-runs AI generation inline |
+| **Tappable stat cards** | Tap Sessions card → scrolls to the sessions list |
+| **Haptic feedback** | Light impact on tile tap, medium on long-press / delete |
+| **Offline banner** | Red bar slides in when connectivity is lost |
+| **Confetti on first upload** | 🎉 Fires when the very first session is created |
+
+### Upload Features (upload_screen)
+| Feature | Description |
+|---------|-------------|
+| **Drag-and-drop zone** | DragTarget with animated dashed border on hover |
+| **Animated step pills** | Upload → Extract → Generate → Done light up in sequence |
+| **Offline banner** | Disables the CTA button and shows a warning when offline |
+| **Confetti burst** | Fires after the Done step on first upload |
+
+### Quiz Features (results_screen)
+| Feature | Description |
+|---------|-------------|
+| **Live score tracker** | Answered / correct / wrong pills update as you tap answers |
+| **Progress ring** | Animated CustomPainter arc shows % correct after submission |
+| **Streak flame 🔥** | Tracks longest consecutive correct run, shown in amber banner |
+| **Try Again** | Resets all answers and score for another attempt |
+
+### Flashcard Features (results_screen)
+| Feature | Description |
+|---------|-------------|
+| **True 3D flip** | Matrix4.rotateY with perspective — real 3D, not a crossfade |
+| **Per-card controller** | Each card has its own AnimationController — flips independently |
+| **Front / back labels** | TERM pill on front, ANSWER pill on back |
 
 ### Admin Features (your account only)
 | Feature | Description |
@@ -211,12 +257,27 @@ flutter run
 
 ## 🌐 API Reference
 
+### Results Endpoints
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/results/` | All results for a user (`?user_id=`) |
+| GET | `/results/{id}` | Single result |
+| DELETE | `/results/{id}` | Delete a session |
+| PATCH | `/results/{id}` | **NEW** — Rename a session (`{"file_name": "new name"}`) |
+| POST | `/retry/{id}` | **NEW** — Re-extract text + reset to pending for retry |
+
 ### Profile Endpoints
 | Method | Endpoint | Description |
 |--------|----------|-------------|
 | GET | `/profile/{user_id}` | Get user profile |
 | PUT | `/profile/{user_id}` | Update name/bio |
 | GET | `/profile/{user_id}/history` | Get study history |
+
+### Upload & Process Endpoints
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| POST | `/upload/` | Upload file, extract text, save stub row |
+| POST | `/process/` | Run AI generation on extracted text |
 
 ### Admin Endpoints (requires admin token)
 | Method | Endpoint | Description |
@@ -229,12 +290,33 @@ flutter run
 
 ---
 
+## 📦 Flutter Dependencies
+
+```yaml
+dependencies:
+  supabase_flutter: ^2.5.3   # Auth + DB + Storage
+  file_picker: ^8.0.3         # File selection
+  dio: ^5.4.3+1               # HTTP client
+  google_fonts: ^6.2.1        # Typography
+  flutter_animate: ^4.5.0     # Animations
+  fluttertoast: ^8.2.4        # Toast messages
+  flutter_dotenv: ^5.1.0      # .env loading
+  shared_preferences: ^2.2.3  # Local storage
+  image_picker: ^1.1.2        # Avatar upload
+  confetti: ^0.7.0            # ← NEW: first-upload celebration
+  connectivity_plus: ^6.0.3   # ← NEW: offline banner
+```
+
+Run `flutter pub get` after updating `pubspec.yaml`.
+
+---
+
 ## ✅ Quick Checklist
 
 ```
 Supabase:
 □ Project created
-□ supabase_setup.sql executed
+□ supabase_setup.sql executed  (includes file_name column)
 □ supabase_profiles_admin.sql executed
 □ Storage bucket "studyforge-files" created as Public
 □ Your account set as admin: UPDATE profiles SET is_admin=true WHERE email='you@...'
@@ -243,10 +325,11 @@ Backend:
 □ backend/.env filled (SUPABASE_URL + SUPABASE_SERVICE_KEY + HF_API_TOKEN)
 □ venv created + pip install -r requirements.txt
 □ uvicorn running on port 8000
+□ httpx installed (used by POST /retry): pip install httpx
 
 Flutter:
 □ flutter_app/.env filled (API_BASE_URL + SUPABASE_URL + SUPABASE_ANON_KEY)
-□ flutter pub get
+□ flutter pub get  (picks up confetti + connectivity_plus)
 □ Emulator running + flutter run
 ```
 
@@ -261,6 +344,11 @@ Flutter:
 | `403 Admin access required` | Your account's is_admin is still false in DB |
 | HF API 503 | Model cold-starting — wait 30s and retry |
 | `Connection refused` | Make sure uvicorn backend is running |
+| Rename not saving | Check `file_name` column exists in results table |
+| Retry button not working | Make sure `httpx` is installed in the backend venv |
+| Confetti not firing | Pass `isFirstUpload: true` when sessions list is empty |
+| Offline banner not showing | Add `connectivity_plus` to pubspec and run `flutter pub get` |
+| Drag-and-drop not working | Only works on desktop/web — mobile uses the tap picker |
 
 ---
 
@@ -277,284 +365,52 @@ Start: uvicorn main:app --host 0.0.0.0 --port $PORT
 flutter build apk --release
 ```
 
-
 ---
 
-## 🗂 Project Structure
+## 📝 Changelog
 
-```
-studyforge_v2/
-├── backend/
-│   ├── main.py                    # FastAPI entry point
-│   ├── requirements.txt
-│   ├── run.sh                     # One-command start script
-│   ├── .env.example               # Copy → .env, fill in values
-│   ├── routers/
-│   │   ├── auth.py                # POST /auth/signup|signin|signout
-│   │   ├── upload.py              # POST /upload
-│   │   ├── process.py             # POST /process  (AI generation)
-│   │   └── results.py             # GET  /results
-│   └── utils/
-│       ├── supabase_client.py     # Shared Supabase client
-│       ├── supabase_helpers.py    # DB + Storage helpers
-│       ├── file_extractor.py      # PDF + DOCX text extraction
-│       └── ai_generator.py        # Hugging Face API calls
-│
-└── flutter_app/
-    ├── pubspec.yaml
-    ├── .env.example               # Copy → .env, fill in values
-    └── lib/
-        ├── main.dart              # Entry point + Supabase init
-        ├── core/
-        │   └── constants.dart     # Colors, fonts, theme
-        ├── models/
-        │   └── study_result.dart
-        ├── services/
-        │   ├── auth_service.dart  # Supabase Auth wrapper
-        │   └── api_service.dart   # FastAPI HTTP client
-        ├── widgets/
-        │   └── sf_logo.dart       # Animated logo widget
-        └── screens/
-            ├── login_screen.dart
-            ├── home_screen.dart
-            ├── upload_screen.dart
-            └── results_screen.dart
-```
+### v2.1.0 — Latest
+**Home screen**
+- Animated stat number roll on load
+- Reactive greeting (updates on hour boundary)
+- Last synced timestamp
+- Search / filter bar with live client-side filtering
+- Sessions grouped by date (This week / This month / Older)
+- Long-press context menu (Rename + Delete)
+- Swipe-to-delete on tiles
+- Rename now persists to backend via PATCH /results/{id}
+- Retry button on pending/failed tiles — re-runs AI inline
+- Tappable Sessions stat card → scrolls to list
+- Haptic feedback on tile tap and long-press
+- Offline banner (connectivity_plus)
+- Confetti on first upload
 
----
+**Upload screen**
+- Drag-and-drop file zone with animated dashed border
+- 4-step animated progress pills (Upload → Extract → Generate → Done)
+- Offline banner disables CTA
 
-## 🆓 Free Services Used
+**Results screen — Quiz**
+- Live score tracker (answered / correct / wrong pills)
+- Progress ring (CustomPainter arc, animated on submit)
+- Streak flame tracker 🔥
 
-| Service | Purpose | Free Limit |
-|---------|---------|-----------|
-| **Supabase** | Auth + Database + Storage | 500 MB DB, 1 GB Storage, 50k MAU |
-| **Hugging Face** | AI text generation | ~30k requests/month |
-| **FastAPI** | Backend API | Self-hosted (free) |
-| **Flutter** | Mobile frontend | Free & open source |
+**Results screen — Flashcards**
+- True 3D flip animation (Matrix4.rotateY + perspective)
+- Per-card independent AnimationController
 
----
+**Backend**
+- `PATCH /results/{id}` — rename endpoint
+- `POST /retry/{id}` — re-extract + reset + return text for retry
 
-## 🔥 STEP 1 — Supabase Setup (5 minutes)
+**Packages added**
+- `confetti: ^0.7.0`
+- `connectivity_plus: ^6.0.3`
 
-### 1a. Create project
-1. Go to **https://supabase.com** → Sign up (free, no credit card)
-2. Click **"New project"** → name it `studyforge`
-3. Choose a region close to you → **Create project** (takes ~1 min)
-
-### 1b. Create the database table
-1. In Supabase dashboard → left sidebar → **SQL Editor**
-2. Click **"New query"** → paste this SQL → click **Run**:
-
-```sql
--- Create results table
-create table results (
-    id          uuid primary key default gen_random_uuid(),
-    user_id     text not null,
-    file_url    text,
-    summary     text,
-    quiz        jsonb default '[]',
-    flashcards  jsonb default '[]',
-    created_at  timestamptz default now()
-);
-
--- Enable Row Level Security
-alter table results enable row level security;
-
--- Allow users to only access their own data
-create policy "Users manage own results"
-    on results for all
-    using  (auth.uid()::text = user_id)
-    with check (auth.uid()::text = user_id);
-```
-
-### 1c. Create Storage bucket
-1. Left sidebar → **Storage** → **New bucket**
-2. Name: `studyforge-files`
-3. Toggle **Public bucket** ON → **Create bucket**
-
-### 1d. Get your API keys
-1. Left sidebar → **Project Settings** → **API**
-2. Copy:
-   - **Project URL** → `SUPABASE_URL`
-   - **anon/public key** → `SUPABASE_ANON_KEY` (for Flutter)
-   - **service_role key** → `SUPABASE_SERVICE_KEY` (for backend — keep secret!)
-
----
-
-## 🤗 STEP 2 — Hugging Face Token (2 minutes)
-
-1. Go to **https://huggingface.co** → Sign up (free)
-2. Click your avatar → **Settings** → **Access Tokens**
-3. Click **"New token"** → Name: `studyforge` → Role: **Read** → **Generate**
-4. Copy the token (starts with `hf_`) — you only see it once!
-
----
-
-## 🐍 STEP 3 — Backend Setup
-
-### 3a. Create the .env file
-```bash
-cd studyforge_v2/backend
-cp .env.example .env
-```
-
-Open `.env` and fill in:
-```
-SUPABASE_URL=https://YOUR_PROJECT_ID.supabase.co
-SUPABASE_SERVICE_KEY=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
-HF_API_TOKEN=hf_your_token_here
-```
-
-### 3b. Install Python dependencies
-```bash
-# Windows
-python -m venv venv
-venv\Scripts\activate
-pip install -r requirements.txt
-
-# Mac / Linux
-python3 -m venv venv
-source venv/bin/activate
-pip install -r requirements.txt
-```
-
-### 3c. Run the backend
-```bash
-uvicorn main:app --host 0.0.0.0 --port 8000 --reload
-```
-
-Or just run:
-```bash
-bash run.sh
-```
-
-✅ Open **http://localhost:8000/docs** — you should see the Swagger UI.
-
-**Keep this terminal open** while using the app.
-
----
-
-## 📱 STEP 4 — Flutter App Setup
-
-### 4a. Create the .env file
-```bash
-cd studyforge_v2/flutter_app
-cp .env.example .env
-```
-
-Open `.env` and fill in:
-```
-API_BASE_URL=http://10.0.2.2:8000
-SUPABASE_URL=https://YOUR_PROJECT_ID.supabase.co
-SUPABASE_ANON_KEY=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
-```
-
-> ⚠️ Use `http://10.0.2.2:8000` for Android emulator
-> Use `http://localhost:8000` for iOS simulator
-> Use your machine's local IP (e.g. `http://192.168.1.x:8000`) for a real device
-
-### 4b. Install Flutter dependencies
-```bash
-flutter pub get
-```
-
-### 4c. Run the app
-```bash
-# Make sure an emulator is running first!
-flutter run
-```
-
----
-
-## ✅ Quick Checklist
-
-```
-Backend:
-□ Supabase project created
-□ SQL table created (results)
-□ Storage bucket created (studyforge-files) — set to Public
-□ backend/.env filled with SUPABASE_URL + SUPABASE_SERVICE_KEY + HF_API_TOKEN
-□ Python venv created and dependencies installed
-□ Backend running on port 8000
-
-Flutter:
-□ flutter_app/.env filled with API_BASE_URL + SUPABASE_URL + SUPABASE_ANON_KEY
-□ flutter pub get run successfully
-□ Android/iOS emulator running
-□ flutter run executed
-```
-
----
-
-## 🌐 API Reference
-
-### `POST /auth/signup`
-```json
-{ "email": "user@example.com", "password": "password123" }
-```
-
-### `POST /auth/signin`
-```json
-{ "email": "user@example.com", "password": "password123" }
-```
-Returns: `{ "access_token": "...", "user_id": "...", "email": "..." }`
-
-### `POST /upload/`
-Form data: `file` (PDF/DOCX), `user_id` (string)
-Returns: `{ "result_id": "...", "extracted_text": "...", "file_url": "..." }`
-
-### `POST /process/`
-```json
-{
-  "result_id": "uuid",
-  "extracted_text": "...",
-  "user_id": "uuid",
-  "num_quiz": 5,
-  "num_flashcards": 8
-}
-```
-Returns: `{ "summary": "...", "quiz": [...], "flashcards": [...] }`
-
-### `GET /results/{result_id}`
-Returns the full study result.
-
-### `GET /results/?user_id={uid}`
-Returns all results for a user.
-
----
-
-## 🆘 Troubleshooting
-
-| Problem | Fix |
-|---------|-----|
-| `SUPABASE_URL not set` | Check your `backend/.env` file |
-| `Connection refused` in app | Make sure `uvicorn` is running |
-| `10.0.2.2` not working | Use your PC's local IP for real devices |
-| HF API returns 503 | Model is cold-starting — wait 30s and retry |
-| `No text extracted` from PDF | Use a text-based PDF, not a scanned image |
-| `flutter pub get` fails | Run `flutter doctor` to check Flutter install |
-| Storage upload fails | Check bucket is set to **Public** in Supabase |
-
----
-
-## 🚀 Free Deployment
-
-### Backend → Render.com (free)
-1. Push `backend/` to a GitHub repo
-2. Go to **render.com** → New Web Service → connect your repo
-3. Build command: `pip install -r requirements.txt`
-4. Start command: `uvicorn main:app --host 0.0.0.0 --port $PORT`
-5. Add environment variables in Render dashboard
-
-### Flutter → Android APK
-```bash
-flutter build apk --release
-# APK is at: build/app/outputs/flutter-apk/app-release.apk
-```
+### v2.0.0
+- Initial release with Auth, Upload, Quiz, Flashcards, Profile, Admin panel
 
 ---
 
 ## 📝 License
 MIT — free for personal and commercial use.
-#   S t u d y F o r g e  
- 

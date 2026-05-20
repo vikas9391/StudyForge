@@ -1,26 +1,30 @@
 """
-Studyforge Backend — main.py
+Studyforge Backend — main.py  (V3)
 FastAPI app using Supabase (free tier) for auth, database, and storage.
 Run with: uvicorn main:app --reload
+
+New in V3:
+  /sr/*       — Spaced repetition (SM-2 algorithm)
+  /ingest/*   — YouTube, URL, and OCR input sources
+  /analytics/*— Weak-topic heatmap + accuracy over time
+  /shared/*   — Public/shared study sessions
 """
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from dotenv import load_dotenv
 
-# Load environment variables from .env file
 load_dotenv()
 
-# Import route handlers
 from routers import auth, upload, process, results, profile
+from routers import spaced_repetition, ingest, analytics, shared
 
 app = FastAPI(
     title="Studyforge API",
-    description="AI-powered study assistant — Supabase edition",
-    version="2.0.0",
+    description="AI-powered study assistant — V3",
+    version="3.0.0",
 )
 
-# Allow Flutter app to connect from any origin (tighten in production)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -29,15 +33,20 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Register all routers
+# V2 routers
 app.include_router(auth.router,    prefix="/auth",    tags=["Auth"])
 app.include_router(upload.router,  prefix="/upload",  tags=["Upload"])
 app.include_router(process.router, prefix="/process", tags=["Process"])
 app.include_router(results.router, prefix="/results", tags=["Results"])
 app.include_router(profile.router, prefix="",         tags=["Profile & Admin"])
 
+# V3 routers
+app.include_router(spaced_repetition.router, prefix="/sr",        tags=["Spaced Repetition"])
+app.include_router(ingest.router,            prefix="/ingest",     tags=["Ingest"])
+app.include_router(analytics.router,         prefix="/analytics",  tags=["Analytics"])
+app.include_router(shared.router,            prefix="/shared",     tags=["Shared Sessions"])
+
 
 @app.get("/")
 def root():
-    """Health-check endpoint."""
-    return {"status": "ok", "message": "Studyforge API is running 🚀"}
+    return {"status": "ok", "message": "Studyforge API V3 is running 🚀"}

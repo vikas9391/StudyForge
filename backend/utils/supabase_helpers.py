@@ -62,6 +62,7 @@ def upload_file_to_storage(file_bytes: bytes, filename: str, user_id: str) -> st
 def save_result(
     user_id: str,
     file_url: str,
+    file_name: str,
     summary: str,
     quiz: list,
     flashcards: list,
@@ -71,6 +72,7 @@ def save_result(
     res = sb.table("results").insert({
         "user_id":    user_id,
         "file_url":   file_url,
+        "file_name":  file_name,
         "summary":    summary,
         "quiz":       quiz,
         "flashcards": flashcards,

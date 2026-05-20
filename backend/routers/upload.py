@@ -26,7 +26,6 @@ async def upload_file(
     Step 1 of 2 — upload and extract.
     Returns result_id + extracted_text (pass both to POST /process).
     """
-    # Validate content type
     if file.content_type not in ALLOWED_CONTENT_TYPES:
         raise HTTPException(
             400,
@@ -35,7 +34,6 @@ async def upload_file(
 
     file_bytes = await file.read()
 
-    # Size check (also enforced in extractor)
     size_mb = len(file_bytes) / (1024 * 1024)
     if size_mb > MAX_FILE_SIZE_MB:
         raise HTTPException(
@@ -43,13 +41,11 @@ async def upload_file(
             f"File is {size_mb:.1f} MB — maximum is {MAX_FILE_SIZE_MB} MB.",
         )
 
-    # Extract text from the file
     try:
         extracted_text = extract_text(file.filename or "upload", file_bytes)
     except ValueError as e:
         raise HTTPException(422, str(e))
 
-    # Upload raw file to Supabase Storage
     try:
         file_url = upload_file_to_storage(
             file_bytes, file.filename or "upload", user_id
@@ -57,11 +53,11 @@ async def upload_file(
     except Exception as e:
         raise HTTPException(500, f"Storage upload failed: {e}")
 
-    # Save stub record to DB (summary/quiz/flashcards filled by /process)
     try:
         result_id = save_result(
             user_id=user_id,
             file_url=file_url,
+            file_name=file.filename or "",
             summary="__pending__",
             quiz=[],
             flashcards=[],

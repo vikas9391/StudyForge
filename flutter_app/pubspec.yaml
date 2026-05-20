@@ -1,7 +1,7 @@
 name: studyforge
 description: AI-powered study assistant — summarise, quiz, and flashcard your documents.
 publish_to: 'none'
-version: 2.0.0+1
+version: 3.0.0+1
 
 environment:
   sdk: '>=3.3.0 <4.0.0'
@@ -10,7 +10,7 @@ dependencies:
   flutter:
     sdk: flutter
 
-  # Supabase — replaces Firebase, free tier, no credit card needed
+  # Supabase
   supabase_flutter: ^2.5.3
 
   # File picking
@@ -34,8 +34,17 @@ dependencies:
   # Local storage
   shared_preferences: ^2.2.3
 
-  # Image picking for profile avatar (optional)
+  # Image picking (profile avatar + OCR camera)
   image_picker: ^1.1.2
+
+  # Confetti burst on first upload
+  confetti: ^0.7.0
+
+  # Offline banner / connectivity detection
+  connectivity_plus: ^6.0.3
+
+  # ✅ V3 NEW: URL launcher (open YouTube links etc.)
+  url_launcher: ^6.3.0
 
 dev_dependencies:
   flutter_test:

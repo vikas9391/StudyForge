@@ -8,3 +8,7 @@ pydantic==2.6.4
 aiofiles==23.2.1
 supabase==2.4.6
 python-dotenv==1.0.1
+beautifulsoup4==4.12.3        # URL scraping
+youtube-transcript-api==0.6.2 # YouTube transcripts
+pytesseract==0.3.10           # OCR (also needs: sudo apt install tesseract-ocr)
+Pillow==10.3.0                # Image processing for OCR
