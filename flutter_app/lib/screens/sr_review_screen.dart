@@ -14,6 +14,7 @@ import '../core/constants.dart';
 import '../models/study_result.dart';
 import '../services/api_service.dart';
 import '../services/auth_service.dart';
+import '../widgets/app_bottom_nav.dart';
 
 class SrReviewScreen extends StatefulWidget {
   const SrReviewScreen({super.key});
@@ -141,7 +142,7 @@ class _SrReviewScreenState extends State<SrReviewScreen>
     return Scaffold(
       backgroundColor: AppColors.bg,
       appBar: AppBar(
-        leading: BackButton(color: AppColors.textSecond),
+        automaticallyImplyLeading: false,
         title: Text('Review Due Cards', style: AppText.subheading),
         actions: [
           if (!_loading && !_done && _queue.isNotEmpty)
@@ -160,15 +161,35 @@ class _SrReviewScreenState extends State<SrReviewScreen>
             ),
         ],
       ),
-      body: _loading
-          ? const Center(child: CircularProgressIndicator(color: AppColors.primary))
-          : _error != null
+      body: Stack(
+        children: [
+
+          // Main Content
+          _loading
+              ? const Center(
+            child: CircularProgressIndicator(
+              color: AppColors.primary,
+            ),
+          )
+              : _error != null
               ? _buildError()
               : _queue.isEmpty
-                  ? _buildAllCaughtUp()
-                  : _done
-                      ? _buildSummary()
-                      : _buildReviewCard(),
+              ? _buildAllCaughtUp()
+              : _done
+              ? _buildSummary()
+              : _buildReviewCard(),
+
+          // Floating Bottom Nav
+          const Positioned(
+            left: 0,
+            right: 0,
+            bottom: 0,
+            child: AppBottomNav(
+              currentTab: AppNavTab.review,
+            ),
+          ),
+        ],
+      ),
     );
   }
 
@@ -219,6 +240,7 @@ class _SrReviewScreenState extends State<SrReviewScreen>
       _SummaryRow(label: 'Easy',  count: _easy,  color: AppColors.accentBlue),
 
       const Spacer(),
+      const SizedBox(height: 110),
       GestureDetector(
         onTap: () => Navigator.pop(context),
         child: Container(
@@ -324,7 +346,7 @@ class _SrReviewScreenState extends State<SrReviewScreen>
           ),
         ),
 
-        const SizedBox(height: 8),
+        const SizedBox(height: 110),
       ]),
     );
   }

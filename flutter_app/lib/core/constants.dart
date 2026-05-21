@@ -18,6 +18,7 @@ class AppColors {
   static const Color primary      = Color(0xFF2D3A8C);
   static const Color primaryEnd   = Color(0xFF1E2D6E);
   static const Color primaryLight = Color(0xFF4A5BA8);
+  // ignore: constant_identifier_names
   static const Color primaryGlow  = Color(0x222D3A8C);
 
   // Semantic accents — restrained, distinct
@@ -32,10 +33,60 @@ class AppColors {
   static const Color textSecond  = Color(0xFF7A7268);
   static const Color textMuted   = Color(0xFFB8B0A4);
 
+  // ── Home-screen specific palette additions ──────────────────────────────────
+  // Upload CTA card background
+  static const Color ctaBlue     = Color(0xFF2A5DB8);
+
+  // Session tile accent colours (cycled by index)
+  static const List<Color> tileAccents = [
+    Color(0xFF2A5DB8),
+    Color(0xFF2A8A4A),
+    Color(0xFFC97D12),
+    Color(0xFF7B55C8),
+  ];
+  static const List<Color> tileAccentBgs = [
+    Color(0xFFEDF2FC),
+    Color(0xFFEDFAF3),
+    Color(0xFFFDF6E8),
+    Color(0xFFF5EDFB),
+  ];
+
+  // Continue card — amber border / highlight
+  static const Color continueAmber    = Color(0xFFE8A520);
+  static const Color continueAmberBg  = Color(0xFFFDF2E0);
+  static const Color continueAmberFg  = Color(0xFFC97D12);
+
+  // Due-for-review section
+  static const Color reviewRedBg      = Color(0xFFFDE8E8);
+  static const Color reviewRedFg      = Color(0xFFC94040);
+
+  // Stats section — positive delta
+  static const Color deltaGreen       = Color(0xFF2A8A4A);
+
+  // Review-item dot colours (cycled by index)
+  static const List<Color> reviewDots = [
+    Color(0xFF4A80E0),
+    Color(0xFF2A8A4A),
+    Color(0xFFC97D12),
+  ];
+  static const List<Color> reviewCountBgs = [
+    Color(0xFFEDF2FC),
+    Color(0xFFEDFAF3),
+    Color(0xFFFDF6E8),
+  ];
+  static const List<Color> reviewCountFgs = [
+    Color(0xFF2A5DB8),
+    Color(0xFF2A8A4A),
+    Color(0xFFC97D12),
+  ];
+
+  // Avatar / profile circle
+  static const Color avatarBlue = Color(0xFF3B6FCA);
+
   // Gradients
   static const LinearGradient primaryGrad = LinearGradient(
-    begin: Alignment.topLeft,
-    end:   Alignment.bottomRight,
+    begin:  Alignment.topLeft,
+    end:    Alignment.bottomRight,
     colors: [primary, primaryEnd],
   );
 
@@ -125,16 +176,16 @@ ThemeData buildAppTheme() {
       style: ElevatedButton.styleFrom(
         backgroundColor: AppColors.primary,
         foregroundColor: Colors.white,
-        padding:  const EdgeInsets.symmetric(horizontal: 28, vertical: 15),
-        shape:    RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+        padding:   const EdgeInsets.symmetric(horizontal: 28, vertical: 15),
+        shape:     RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
         textStyle: GoogleFonts.dmSans(fontWeight: FontWeight.w600, fontSize: 15),
         elevation: 0,
       ),
     ),
     inputDecorationTheme: InputDecorationTheme(
-      filled:       true,
-      fillColor:    AppColors.surface,
-      border:       OutlineInputBorder(
+      filled:      true,
+      fillColor:   AppColors.surface,
+      border: OutlineInputBorder(
         borderRadius: BorderRadius.circular(12),
         borderSide:   const BorderSide(color: AppColors.border),
       ),

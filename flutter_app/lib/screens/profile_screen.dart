@@ -9,6 +9,7 @@ import '../services/auth_service.dart';
 import '../services/profile_service.dart';
 import 'results_screen.dart';
 import '../main.dart' show slideRoute;
+import '../widgets/app_bottom_nav.dart';
 
 class ProfileScreen extends StatefulWidget {
   const ProfileScreen({super.key});
@@ -136,7 +137,7 @@ class _ProfileScreenState extends State<ProfileScreen>
       appBar: AppBar(
         backgroundColor: AppColors.surface,
         elevation:       0,
-        leading:  BackButton(color: AppColors.textSecond),
+        automaticallyImplyLeading: false,
         title:    Text('My Profile', style: AppText.subheading),
         actions: [
           if (!_editing && _userProfile != null)
@@ -204,20 +205,42 @@ class _ProfileScreenState extends State<ProfileScreen>
           ),
         ),
       ),
-      body: Container(
-        decoration: const BoxDecoration(gradient: AppColors.bgGrad),
-        child: _loadingProfile
-            ? const Center(child: CircularProgressIndicator(
-            color: AppColors.primary, strokeWidth: 2.5))
-            : _error != null
-            ? _buildError()
-            : TabBarView(
-          controller: _tabs,
-          children: [
-            _buildProfileTab(),
-            _buildHistoryTab(),
-          ],
-        ),
+      body: Stack(
+        children: [
+
+          // Main Content
+          Container(
+            decoration: const BoxDecoration(
+              gradient: AppColors.bgGrad,
+            ),
+            child: _loadingProfile
+                ? const Center(
+              child: CircularProgressIndicator(
+                color: AppColors.primary,
+                strokeWidth: 2.5,
+              ),
+            )
+                : _error != null
+                ? _buildError()
+                : TabBarView(
+              controller: _tabs,
+              children: [
+                _buildProfileTab(),
+                _buildHistoryTab(),
+              ],
+            ),
+          ),
+
+          // Floating Bottom Nav
+          const Positioned(
+            left: 0,
+            right: 0,
+            bottom: 0,
+            child: AppBottomNav(
+              currentTab: AppNavTab.profile,
+            ),
+          ),
+        ],
       ),
     );
   }
@@ -436,7 +459,7 @@ class _ProfileScreenState extends State<ProfileScreen>
             _MiniStat(label: 'Joined', value: _formatDate(p.createdAt),
                 icon: Icons.calendar_today_rounded, color: AppColors.accentGreen),
           ]).animate().fadeIn(delay: 180.ms).slideY(begin: 0.1),
-
+          const SizedBox(height: 110),
         ]),
       ),
     );
@@ -457,7 +480,7 @@ class _ProfileScreenState extends State<ProfileScreen>
       return Center(
         child: Column(mainAxisSize: MainAxisSize.min, children: [
           Container(
-            padding:    const EdgeInsets.all(20),
+            padding: const EdgeInsets.all(16),
             decoration: BoxDecoration(
               color:  AppColors.primary.withOpacity(0.06),
               shape:  BoxShape.circle,
@@ -475,7 +498,7 @@ class _ProfileScreenState extends State<ProfileScreen>
     }
 
     return ListView.builder(
-      padding:     const EdgeInsets.all(16),
+    padding: const EdgeInsets.fromLTRB(16, 16, 16, 110),
       itemCount:   _history.length,
       itemBuilder: (ctx, i) {
         final s       = _history[i];

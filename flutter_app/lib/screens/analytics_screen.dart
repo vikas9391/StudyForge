@@ -7,6 +7,7 @@ import '../core/constants.dart';
 import '../models/study_result.dart';
 import '../services/api_service.dart';
 import '../services/auth_service.dart';
+import '../widgets/app_bottom_nav.dart';
 
 class AnalyticsScreen extends StatefulWidget {
   const AnalyticsScreen({super.key});
@@ -60,28 +61,55 @@ class _AnalyticsScreenState extends State<AnalyticsScreen> {
     return Scaffold(
       backgroundColor: AppColors.bg,
       appBar: AppBar(
-        leading: BackButton(color: AppColors.textSecond),
+        automaticallyImplyLeading: false,
         title: Text('Analytics', style: AppText.subheading),
       ),
-      body: _loading
-          ? const Center(child: CircularProgressIndicator(color: AppColors.primary))
-          : _error != null
+      body: Stack(
+        children: [
+
+          // Main Content
+          _loading
+              ? const Center(
+            child: CircularProgressIndicator(
+              color: AppColors.primary,
+            ),
+          )
+              : _error != null
               ? _buildError()
               : RefreshIndicator(
-                  onRefresh: _load,
-                  color: AppColors.primary,
-                  child: ListView(
-                    padding: const EdgeInsets.all(20),
-                    children: [
-                      _buildSummaryCards(),
-                      const SizedBox(height: 24),
-                      _buildAccuracyChart(),
-                      const SizedBox(height: 24),
-                      _buildWeakTopicsHeatmap(),
-                      const SizedBox(height: 40),
-                    ],
-                  ),
-                ),
+            onRefresh: _load,
+            color: AppColors.primary,
+            child: ListView(
+              padding: const EdgeInsets.all(20),
+              children: [
+
+                _buildSummaryCards(),
+
+                const SizedBox(height: 24),
+
+                _buildAccuracyChart(),
+
+                const SizedBox(height: 24),
+
+                _buildWeakTopicsHeatmap(),
+
+                // IMPORTANT SPACER
+                const SizedBox(height: 110),
+              ],
+            ),
+          ),
+
+          // Floating Bottom Nav
+          const Positioned(
+            left: 0,
+            right: 0,
+            bottom: 0,
+            child: AppBottomNav(
+              currentTab: AppNavTab.analytics,
+            ),
+          ),
+        ],
+      ),
     );
   }
 

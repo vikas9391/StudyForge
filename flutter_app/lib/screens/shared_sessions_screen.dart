@@ -11,6 +11,7 @@ import '../services/api_service.dart';
 import '../services/auth_service.dart';
 import '../main.dart' show slideRoute;
 import 'results_screen.dart';
+import '../widgets/app_bottom_nav.dart';
 
 class SharedSessionsScreen extends StatefulWidget {
   const SharedSessionsScreen({super.key});
@@ -147,46 +148,92 @@ class _SharedSessionsScreenState extends State<SharedSessionsScreen> {
     return Scaffold(
       backgroundColor: AppColors.bg,
       appBar: AppBar(
-        leading: BackButton(color: AppColors.textSecond),
+        automaticallyImplyLeading: false,
         title: Text('Community Sessions', style: AppText.subheading),
       ),
-      body: _loading
-          ? const Center(child: CircularProgressIndicator(color: AppColors.primary))
-          : _error != null
+      body: Stack(
+        children: [
+
+          // Main Content
+          _loading
+              ? const Center(
+            child: CircularProgressIndicator(
+              color: AppColors.primary,
+            ),
+          )
+              : _error != null
               ? _buildError()
               : RefreshIndicator(
-                  onRefresh: _load,
-                  color: AppColors.primary,
-                  child: CustomScrollView(
-                    slivers: [
-                      SliverToBoxAdapter(child: _buildSearchBar()),
-                      if (_searchCtrl.text.isEmpty && _featured.isNotEmpty)
-                        SliverToBoxAdapter(child: _buildFeaturedShelf()),
-                      SliverToBoxAdapter(child: _buildBrowseHeader()),
-                      if (_searching)
-                        const SliverToBoxAdapter(
-                            child: Center(child: Padding(
-                              padding: EdgeInsets.all(32),
-                              child: CircularProgressIndicator(
-                                  color: AppColors.primary, strokeWidth: 2),
-                            )))
-                      else if (_browse.isEmpty)
-                        SliverToBoxAdapter(child: _buildEmpty())
-                      else
-                        SliverList(
-                          delegate: SliverChildBuilderDelegate(
-                            (ctx, i) {
-                              if (i == _browse.length) {
-                                return _buildLoadMore();
-                              }
-                              return _buildSessionCard(_browse[i], i);
-                            },
-                            childCount: _browse.length + 1,
-                          ),
-                        ),
-                    ],
-                  ),
+            onRefresh: _load,
+            color: AppColors.primary,
+            child: CustomScrollView(
+              slivers: [
+
+                SliverToBoxAdapter(
+                  child: _buildSearchBar(),
                 ),
+
+                if (_searchCtrl.text.isEmpty && _featured.isNotEmpty)
+                  SliverToBoxAdapter(
+                    child: _buildFeaturedShelf(),
+                  ),
+
+                SliverToBoxAdapter(
+                  child: _buildBrowseHeader(),
+                ),
+
+                if (_searching)
+                  const SliverToBoxAdapter(
+                    child: Center(
+                      child: Padding(
+                        padding: EdgeInsets.all(32),
+                        child: CircularProgressIndicator(
+                          color: AppColors.primary,
+                          strokeWidth: 2,
+                        ),
+                      ),
+                    ),
+                  )
+                else if (_browse.isEmpty)
+                  SliverToBoxAdapter(
+                    child: _buildEmpty(),
+                  )
+                else
+                  SliverList(
+                    delegate: SliverChildBuilderDelegate(
+                          (ctx, i) {
+                        if (i == _browse.length) {
+                          return _buildLoadMore();
+                        }
+
+                        return _buildSessionCard(
+                          _browse[i],
+                          i,
+                        );
+                      },
+                      childCount: _browse.length + 1,
+                    ),
+                  ),
+
+                // IMPORTANT SPACER
+                const SliverToBoxAdapter(
+                  child: SizedBox(height: 110),
+                ),
+              ],
+            ),
+          ),
+
+          // Floating Bottom Nav
+          const Positioned(
+            left: 0,
+            right: 0,
+            bottom: 0,
+            child: AppBottomNav(
+              currentTab: AppNavTab.community,
+            ),
+          ),
+        ],
+      ),
     );
   }
 
