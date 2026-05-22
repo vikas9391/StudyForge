@@ -1,7 +1,7 @@
-# 📚 Studyforge V2 — AI-Powered Study Assistant
+# 📚 Studyforge V3 — AI-Powered Study Assistant
 
 > Upload a PDF or DOCX → AI generates a **Summary**, **Quiz**, and **Flashcards** instantly.
-> Includes **User Profiles**, **Study History**, and a full **Admin Panel**.
+> Includes **User Profiles**, **Study History**, **Spaced Repetition**, **Analytics**, and a full **Admin Panel**.
 > 100% free-tier stack: Supabase + Hugging Face + FastAPI + Flutter.
 
 ---
@@ -38,15 +38,21 @@ studyforge_v2/
         │   └── profile.dart
         ├── services/
         │   ├── auth_service.dart
-        │   ├── api_service.dart              ← UPDATED (rename + retry)
+        │   ├── api_service.dart              ← UPDATED (rename + retry + stats + notifications)
         │   └── profile_service.dart
-        ├── widgets/sf_logo.dart
+        ├── widgets/
+        │   ├── sf_logo.dart
+        │   └── app_bottom_nav.dart           ← NEW
         └── screens/
             ├── login_screen.dart
             ├── home_screen.dart              ← UPDATED
             ├── upload_screen.dart            ← UPDATED
             ├── results_screen.dart           ← UPDATED
             ├── profile_screen.dart
+            ├── analytics_screen.dart         ← NEW
+            ├── sr_review_screen.dart         ← NEW
+            ├── shared_sessions_screen.dart   ← NEW
+            ├── notifications_screen.dart     ← NEW
             └── admin/
                 ├── admin_dashboard_screen.dart
                 ├── admin_users_screen.dart
@@ -198,11 +204,20 @@ flutter run
 | Feature | Description |
 |---------|-------------|
 | **Auth** | Email/password sign up & sign in via Supabase |
-| **Dashboard** | Stats (sessions, questions, flashcards) with animated number roll |
+| **Dashboard** | Stats (sessions, questions, flashcards, accuracy) with animated number roll |
 | **Upload** | PDF/DOCX upload with drag-and-drop + animated step progress |
 | **AI Study Materials** | Summary, MCQ quiz with score tracker, 3D flip flashcards |
 | **Profile** | Edit name & bio, view account info |
 | **History** | Sessions grouped by date with search/filter |
+| **Spaced Repetition** | Due-for-review section on home screen with dedicated review screen |
+| **Analytics** | Per-user accuracy trends and weekly stats |
+| **Notifications** | In-app notification centre with unread badge dot |
+| **Shared Sessions** | Browse and study sessions shared by other users |
+
+### Navigation
+| Feature | Description |
+|---------|-------------|
+| **Bottom nav bar** | Persistent `AppBottomNav` widget with `AppNavTab` enum — switches between Home, Upload, Review, Analytics, and Shared screens |
 
 ### Dashboard Features (home_screen)
 | Feature | Description |
@@ -210,12 +225,18 @@ flutter run
 | **Animated stat cards** | Numbers roll from 0 → value on load (TweenAnimationBuilder) |
 | **Reactive greeting** | Updates every minute on hour boundary (Good morning / afternoon / evening) |
 | **Last synced timestamp** | Shows "Synced 2m ago" below the header |
+| **Notifications bell** | Icon button in the header; red dot badge shows unread count; tapping opens `NotificationsScreen` and refreshes the count on return |
+| **Stat cards — Questions & Flashcards** | All-time totals computed locally from loaded sessions; delta pill shows week-over-week change (e.g. "+5 new this week") in green/red |
+| **Stat card — Accuracy rate** | Shows average quiz accuracy as a percentage with an animated `LinearProgressIndicator` bar; sourced from `/analytics/summary` |
+| **Stat card — Docs processed** | Running count of all sessions with "PDFs, links & more" label |
 | **Search & filter** | Live client-side search across session names and summaries |
 | **Grouped sessions** | Sessions bucketed into This week / This month / Older |
 | **Long-press context menu** | Hold any tile → Rename or Delete |
 | **Swipe to delete** | Swipe left on any tile to delete with confirmation |
 | **Rename sessions** | Rename dialog syncs to backend via PATCH /results/{id} |
 | **Retry failed sessions** | Pending tiles show a Retry button — re-runs AI generation inline |
+| **Continue where you left off card** | Amber-bordered card showing the most recent non-pending session with quick-jump buttons to Review Q&A and Flashcards |
+| **Due for review section** | Bottom card listing up to 3 sessions with flashcard counts and colour-coded dots; "Start review session" button opens `SrReviewScreen` |
 | **Tappable stat cards** | Tap Sessions card → scrolls to the sessions list |
 | **Haptic feedback** | Light impact on tile tap, medium on long-press / delete |
 | **Offline banner** | Red bar slides in when connectivity is lost |
@@ -263,8 +284,8 @@ flutter run
 | GET | `/results/` | All results for a user (`?user_id=`) |
 | GET | `/results/{id}` | Single result |
 | DELETE | `/results/{id}` | Delete a session |
-| PATCH | `/results/{id}` | **NEW** — Rename a session (`{"file_name": "new name"}`) |
-| POST | `/retry/{id}` | **NEW** — Re-extract text + reset to pending for retry |
+| PATCH | `/results/{id}` | Rename a session (`{"file_name": "new name"}`) |
+| POST | `/retry/{id}` | Re-extract text + reset to pending for retry |
 
 ### Profile Endpoints
 | Method | Endpoint | Description |
@@ -278,6 +299,17 @@ flutter run
 |--------|----------|-------------|
 | POST | `/upload/` | Upload file, extract text, save stub row |
 | POST | `/process/` | Run AI generation on extracted text |
+
+### Analytics & Stats Endpoints
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/analytics/weekly?user_id=` | **NEW** — Questions & flashcards created this week vs last week (deltas) |
+| GET | `/analytics/summary?user_id=` | **NEW** — Average accuracy rate across all completed quizzes |
+
+### Notifications Endpoints
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/notifications?user_id=` | **NEW** — List all notifications for a user (includes `is_read` flag) |
 
 ### Admin Endpoints (requires admin token)
 | Method | Endpoint | Description |
@@ -349,6 +381,11 @@ Flutter:
 | Confetti not firing | Pass `isFirstUpload: true` when sessions list is empty |
 | Offline banner not showing | Add `connectivity_plus` to pubspec and run `flutter pub get` |
 | Drag-and-drop not working | Only works on desktop/web — mobile uses the tap picker |
+| Stats showing 0 / accuracy blank | Implement `/analytics/weekly` and `/analytics/summary` endpoints in backend |
+| Notifications bell always empty | Implement `/notifications` endpoint returning `[{id, is_read, ...}]` |
+| Bottom nav not switching screens | Ensure `AppBottomNav` receives `currentTab` and `onTabChanged` and each `AppNavTab` pushes the correct screen |
+| "Continue" card not showing | Card only appears when at least one non-pending session exists |
+| Due for review section missing | Requires at least one session with flashcards; uses first 3 parsed sessions |
 
 ---
 
@@ -374,6 +411,12 @@ flutter build apk --release
 - Animated stat number roll on load
 - Reactive greeting (updates on hour boundary)
 - Last synced timestamp
+- Notifications bell with unread count badge; opens `NotificationsScreen`
+- Stat cards for Questions, Flashcards, Docs processed, and Accuracy rate
+- Week-over-week delta indicators on Questions and Flashcards cards (green/red)
+- Accuracy rate card with animated `LinearProgressIndicator` bar
+- "Continue where you left off" amber card for the most recent session
+- Due-for-review section with spaced-repetition card list and "Start review session" CTA
 - Search / filter bar with live client-side filtering
 - Sessions grouped by date (This week / This month / Older)
 - Long-press context menu (Rename + Delete)
@@ -384,6 +427,13 @@ flutter build apk --release
 - Haptic feedback on tile tap and long-press
 - Offline banner (connectivity_plus)
 - Confetti on first upload
+- Persistent bottom navigation bar (`AppBottomNav`)
+
+**New screens**
+- `NotificationsScreen` — in-app notification list with read/unread state
+- `SrReviewScreen` — spaced repetition flashcard review session
+- `AnalyticsScreen` — accuracy trends and weekly activity
+- `SharedSessionsScreen` — browse sessions shared by other users
 
 **Upload screen**
 - Drag-and-drop file zone with animated dashed border
@@ -402,6 +452,9 @@ flutter build apk --release
 **Backend**
 - `PATCH /results/{id}` — rename endpoint
 - `POST /retry/{id}` — re-extract + reset + return text for retry
+- `GET /analytics/weekly` — weekly question & flashcard delta stats
+- `GET /analytics/summary` — average accuracy rate
+- `GET /notifications` — user notification list
 
 **Packages added**
 - `confetti: ^0.7.0`

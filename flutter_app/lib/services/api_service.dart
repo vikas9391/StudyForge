@@ -7,6 +7,7 @@ import 'package:dio/dio.dart' as diolib;
 import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../models/study_result.dart';
+import '../models/notification_item.dart';
 
 class ApiService {
   static final ApiService _instance = ApiService._internal();
@@ -137,7 +138,6 @@ class ApiService {
 
   // ── V3: Spaced Repetition ─────────────────────────────────────────────────
 
-  /// Initialise SR cards for all flashcards in a session.
   Future<void> initSrCards({
     required String resultId,
     required String userId,
@@ -153,7 +153,6 @@ class ApiService {
     }
   }
 
-  /// Submit a card review (quality 0–5).
   Future<Map<String, dynamic>> submitSrReview({
     required String userId,
     required String resultId,
@@ -173,7 +172,6 @@ class ApiService {
     }
   }
 
-  /// Get all cards due for review today.
   Future<List<SrSession>> getDueCards(String userId) async {
     try {
       final response = await _dio.get('/sr/due/$userId');
@@ -186,7 +184,6 @@ class ApiService {
     }
   }
 
-  /// Get SR deck stats.
   Future<Map<String, dynamic>> getSrStats(String userId) async {
     try {
       final response = await _dio.get('/sr/stats/$userId');
@@ -198,7 +195,6 @@ class ApiService {
 
   // ── V3: Ingest (YouTube / URL / OCR) ─────────────────────────────────────
 
-  /// Ingest a webpage URL.
   Future<Map<String, dynamic>> ingestUrl({
     required String url,
     required String userId,
@@ -214,7 +210,6 @@ class ApiService {
     }
   }
 
-  /// Ingest a YouTube video transcript.
   Future<Map<String, dynamic>> ingestYouTube({
     required String url,
     required String userId,
@@ -230,7 +225,6 @@ class ApiService {
     }
   }
 
-  /// Ingest an image via OCR.
   Future<Map<String, dynamic>> ingestOcr({
     required File imageFile,
     required String userId,
@@ -311,6 +305,15 @@ class ApiService {
     }
   }
 
+  Future<Map<String, dynamic>> getWeeklyStats(String userId) async {
+    try {
+      final response = await _dio.get('/analytics/weekly-stats/$userId');
+      return response.data as Map<String, dynamic>;
+    } on diolib.DioException catch (e) {
+      throw _parseError(e);
+    }
+  }
+
   // ── V3: Shared Sessions ───────────────────────────────────────────────────
 
   Future<void> setSessionVisibility(String resultId, bool isPublic) async {
@@ -362,6 +365,44 @@ class ApiService {
       final response = await _dio.post('/shared/$resultId/clone',
           data: {'user_id': userId});
       return (response.data as Map<String, dynamic>)['new_result_id'] as String;
+    } on diolib.DioException catch (e) {
+      throw _parseError(e);
+    }
+  }
+
+  // ── Notifications ─────────────────────────────────────────────────────────
+
+  Future<List<NotificationItem>> getNotifications(String userId) async {
+    try {
+      final response = await _dio.get('/notifications/$userId');
+      final data = response.data as Map<String, dynamic>;
+      return (data['notifications'] as List? ?? [])
+          .map((n) => NotificationItem.fromJson(n as Map<String, dynamic>))
+          .toList();
+    } on diolib.DioException catch (e) {
+      throw _parseError(e);
+    }
+  }
+
+  Future<void> markNotificationRead(String notificationId) async {
+    try {
+      await _dio.patch('/notifications/$notificationId/read');
+    } on diolib.DioException catch (e) {
+      throw _parseError(e);
+    }
+  }
+
+  Future<void> markAllNotificationsRead(String userId) async {
+    try {
+      await _dio.post('/notifications/$userId/read-all');
+    } on diolib.DioException catch (e) {
+      throw _parseError(e);
+    }
+  }
+
+  Future<void> deleteNotification(String notificationId) async {
+    try {
+      await _dio.delete('/notifications/$notificationId');
     } on diolib.DioException catch (e) {
       throw _parseError(e);
     }

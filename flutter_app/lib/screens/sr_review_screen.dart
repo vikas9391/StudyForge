@@ -5,6 +5,8 @@
 // User taps to reveal the answer, then rates recall quality (Again/Hard/Good/Easy).
 // Ratings map to SM-2 quality scores: Again=1, Hard=2, Good=3, Easy=5.
 // After all cards, shows a completion summary.
+// FIX: API call fired in background — UI advances immediately on tap
+// FIX: All emojis replaced with icons for a professional appearance
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -28,9 +30,9 @@ class _SrReviewScreenState extends State<SrReviewScreen>
   final _api  = ApiService();
   final _auth = AuthService();
 
-  List<SrSession> _sessions = [];
-  List<SrCard>    _queue    = [];           // flat queue of all due cards
-  List<String>    _resultIds = [];          // matching result_id for each card
+  List<SrSession> _sessions   = [];
+  List<SrCard>    _queue      = [];
+  List<String>    _resultIds  = [];
 
   int  _currentIndex = 0;
   bool _revealed     = false;
@@ -38,14 +40,14 @@ class _SrReviewScreenState extends State<SrReviewScreen>
   bool _submitting   = false;
   String? _error;
 
-  // Stats for summary screen
   int _reviewed = 0;
   int _again    = 0;
   int _hard     = 0;
   int _good     = 0;
   int _easy     = 0;
 
-  // Flip animation
+  AppNavTab _currentTab = AppNavTab.review;
+
   late AnimationController _flipCtrl;
   late Animation<double>   _flipAnim;
 
@@ -54,7 +56,7 @@ class _SrReviewScreenState extends State<SrReviewScreen>
     super.initState();
     _flipCtrl = AnimationController(
       vsync: this,
-      duration: const Duration(milliseconds: 380),
+      duration: const Duration(milliseconds: 320),
     );
     _flipAnim = Tween<double>(begin: 0, end: 1)
         .animate(CurvedAnimation(parent: _flipCtrl, curve: Curves.easeInOutCubic));
@@ -73,8 +75,6 @@ class _SrReviewScreenState extends State<SrReviewScreen>
       final uid = _auth.userId;
       if (uid == null) throw 'Not signed in.';
       _sessions = await _api.getDueCards(uid);
-
-      // Flatten into a single queue
       _queue     = [];
       _resultIds = [];
       for (final s in _sessions) {
@@ -83,7 +83,7 @@ class _SrReviewScreenState extends State<SrReviewScreen>
           _resultIds.add(s.resultId);
         }
       }
-      setState(() { _loading = false; });
+      setState(() => _loading = false);
     } catch (e) {
       setState(() { _loading = false; _error = e.toString(); });
     }
@@ -91,31 +91,31 @@ class _SrReviewScreenState extends State<SrReviewScreen>
 
   SrCard get _current => _queue[_currentIndex];
 
-  Future<void> _rate(int quality) async {
+  void _rate(int quality) {
+    // Guard: ignore double-taps
     if (_submitting) return;
     HapticFeedback.lightImpact();
     setState(() => _submitting = true);
 
-    final uid = _auth.userId ?? '';
-    try {
-      await _api.submitSrReview(
-        userId:    uid,
-        resultId:  _resultIds[_currentIndex],
-        cardIndex: _current.cardIndex,
-        quality:   quality,
-      );
-    } catch (_) {
-      // Non-critical — continue the session even if a review fails to save
-    }
+    // ── Fire API call in background — do NOT await it ──────────────────────
+    final uid      = _auth.userId ?? '';
+    final resultId = _resultIds[_currentIndex];
+    final cardIdx  = _current.cardIndex;
+    _api.submitSrReview(
+      userId:    uid,
+      resultId:  resultId,
+      cardIndex: cardIdx,
+      quality:   quality,
+    ).catchError((_) {});   // swallow errors silently
 
-    // Update stats
+    // ── Update counters immediately ────────────────────────────────────────
     _reviewed++;
     if (quality <= 1)      _again++;
     else if (quality == 2) _hard++;
     else if (quality == 3) _good++;
     else                   _easy++;
 
-    // Advance or finish
+    // ── Advance UI immediately ─────────────────────────────────────────────
     if (_currentIndex + 1 >= _queue.length) {
       setState(() { _submitting = false; _currentIndex = _queue.length; });
     } else {
@@ -143,7 +143,10 @@ class _SrReviewScreenState extends State<SrReviewScreen>
       backgroundColor: AppColors.bg,
       appBar: AppBar(
         automaticallyImplyLeading: false,
-        title: Text('Review Due Cards', style: AppText.subheading),
+        backgroundColor: AppColors.bg,
+        surfaceTintColor: Colors.transparent,
+        elevation: 0,
+        title: Text('Due Cards', style: AppText.subheading),
         actions: [
           if (!_loading && !_done && _queue.isNotEmpty)
             Padding(
@@ -163,13 +166,9 @@ class _SrReviewScreenState extends State<SrReviewScreen>
       ),
       body: Stack(
         children: [
-
-          // Main Content
           _loading
               ? const Center(
-            child: CircularProgressIndicator(
-              color: AppColors.primary,
-            ),
+            child: CircularProgressIndicator(color: AppColors.primary),
           )
               : _error != null
               ? _buildError()
@@ -179,13 +178,11 @@ class _SrReviewScreenState extends State<SrReviewScreen>
               ? _buildSummary()
               : _buildReviewCard(),
 
-          // Floating Bottom Nav
-          const Positioned(
-            left: 0,
-            right: 0,
-            bottom: 0,
+          Positioned(
+            left: 0, right: 0, bottom: 0,
             child: AppBottomNav(
-              currentTab: AppNavTab.review,
+              currentTab: _currentTab,
+              onTabChanged: (tab) => setState(() => _currentTab = tab),
             ),
           ),
         ],
@@ -193,104 +190,218 @@ class _SrReviewScreenState extends State<SrReviewScreen>
     );
   }
 
+  // ── Error ──────────────────────────────────────────────────────────────────
+
   Widget _buildError() => Center(
     child: Padding(
       padding: const EdgeInsets.all(32),
       child: Column(mainAxisSize: MainAxisSize.min, children: [
-        const Icon(Icons.error_outline_rounded, size: 48, color: AppColors.accentRed),
+        Container(
+          width: 56, height: 56,
+          decoration: BoxDecoration(
+            color: AppColors.accentRed.withOpacity(0.08),
+            borderRadius: BorderRadius.circular(16),
+          ),
+          child: const Icon(Icons.error_outline_rounded,
+              size: 28, color: AppColors.accentRed),
+        ),
         const SizedBox(height: 16),
-        Text(_error!, textAlign: TextAlign.center, style: AppText.caption),
+        Text('Something went wrong',
+            style: TextStyle(
+                fontSize: 16,
+                fontWeight: FontWeight.w700,
+                color: AppColors.textPrimary)),
+        const SizedBox(height: 8),
+        Text(_error!,
+            textAlign: TextAlign.center,
+            style: TextStyle(fontSize: 13, color: AppColors.textSecond)),
         const SizedBox(height: 20),
-        ElevatedButton(onPressed: _loadDueCards, child: const Text('Retry')),
+        GestureDetector(
+          onTap: _loadDueCards,
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 11),
+            decoration: BoxDecoration(
+              color: AppColors.primary,
+              borderRadius: BorderRadius.circular(12),
+            ),
+            child: const Text('Retry',
+                style: TextStyle(
+                    color: Colors.white,
+                    fontWeight: FontWeight.w600,
+                    fontSize: 14)),
+          ),
+        ),
       ]),
     ),
   );
+
+  // ── All caught up ──────────────────────────────────────────────────────────
 
   Widget _buildAllCaughtUp() => Center(
     child: Padding(
       padding: const EdgeInsets.all(32),
       child: Column(mainAxisSize: MainAxisSize.min, children: [
-        Text('🎉', style: const TextStyle(fontSize: 56)),
-        const SizedBox(height: 16),
-        Text('All caught up!',
-            style: AppText.subheading.copyWith(fontWeight: FontWeight.w800)),
+        Container(
+          width: 64, height: 64,
+          decoration: BoxDecoration(
+            color: AppColors.accentGreen.withOpacity(0.10),
+            borderRadius: BorderRadius.circular(20),
+          ),
+          child: const Icon(Icons.check_circle_outline_rounded,
+              size: 32, color: AppColors.accentGreen),
+        ),
+        const SizedBox(height: 20),
+        Text('All caught up',
+            style: TextStyle(
+                fontSize: 20,
+                fontWeight: FontWeight.w800,
+                color: AppColors.textPrimary,
+                letterSpacing: -0.4)),
         const SizedBox(height: 8),
-        Text('No cards are due for review today.\nCome back tomorrow!',
-            textAlign: TextAlign.center, style: AppText.caption),
+        Text('No cards are due for review today.\nCheck back tomorrow.',
+            textAlign: TextAlign.center,
+            style: TextStyle(
+                fontSize: 14,
+                height: 1.55,
+                color: AppColors.textSecond)),
       ]),
-    ).animate().fadeIn().scale(begin: const Offset(0.9, 0.9)),
+    ).animate().fadeIn().scale(begin: const Offset(0.92, 0.92)),
   );
+
+  // ── Summary ────────────────────────────────────────────────────────────────
 
   Widget _buildSummary() => Padding(
     padding: const EdgeInsets.all(24),
     child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-      const SizedBox(height: 20),
-      Text('Session complete! 🎉',
-          textAlign: TextAlign.center,
-          style: AppText.subheading.copyWith(fontWeight: FontWeight.w800)),
-      const SizedBox(height: 8),
-      Text('You reviewed $_reviewed card${_reviewed == 1 ? '' : 's'}.',
-          textAlign: TextAlign.center, style: AppText.caption),
-      const SizedBox(height: 32),
+      const SizedBox(height: 16),
 
-      // Rating breakdown
-      _SummaryRow(label: 'Again', count: _again, color: AppColors.accentRed),
-      _SummaryRow(label: 'Hard',  count: _hard,  color: AppColors.accentAmber),
-      _SummaryRow(label: 'Good',  count: _good,  color: AppColors.accentGreen),
-      _SummaryRow(label: 'Easy',  count: _easy,  color: AppColors.accentBlue),
+      // Header
+      Container(
+        padding: const EdgeInsets.all(20),
+        decoration: BoxDecoration(
+          color: AppColors.surface,
+          borderRadius: BorderRadius.circular(18),
+          border: Border.all(color: AppColors.border),
+        ),
+        child: Row(children: [
+          Container(
+            width: 48, height: 48,
+            decoration: BoxDecoration(
+              color: AppColors.primaryGlow,
+              borderRadius: BorderRadius.circular(14),
+            ),
+            child: const Icon(Icons.done_all_rounded,
+                size: 24, color: AppColors.primary),
+          ),
+          const SizedBox(width: 16),
+          Expanded(
+            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Text('Session complete',
+                  style: TextStyle(
+                      fontSize: 16,
+                      fontWeight: FontWeight.w800,
+                      color: AppColors.textPrimary,
+                      letterSpacing: -0.3)),
+              const SizedBox(height: 2),
+              Text('$_reviewed card${_reviewed == 1 ? '' : 's'} reviewed',
+                  style: TextStyle(
+                      fontSize: 13, color: AppColors.textSecond)),
+            ]),
+          ),
+        ]),
+      ),
+
+      const SizedBox(height: 16),
+
+      // Breakdown
+      Container(
+        padding: const EdgeInsets.all(18),
+        decoration: BoxDecoration(
+          color: AppColors.surface,
+          borderRadius: BorderRadius.circular(18),
+          border: Border.all(color: AppColors.border),
+        ),
+        child: Column(children: [
+          _SummaryRow(
+              icon: Icons.replay_rounded,
+              label: 'Again',
+              count: _again,
+              color: AppColors.accentRed),
+          const SizedBox(height: 10),
+          _SummaryRow(
+              icon: Icons.trending_down_rounded,
+              label: 'Hard',
+              count: _hard,
+              color: AppColors.accentAmber),
+          const SizedBox(height: 10),
+          _SummaryRow(
+              icon: Icons.check_rounded,
+              label: 'Good',
+              count: _good,
+              color: AppColors.accentGreen),
+          const SizedBox(height: 10),
+          _SummaryRow(
+              icon: Icons.bolt_rounded,
+              label: 'Easy',
+              count: _easy,
+              color: AppColors.accentBlue),
+        ]),
+      ),
 
       const Spacer(),
       const SizedBox(height: 110),
+
       GestureDetector(
         onTap: () => Navigator.pop(context),
         child: Container(
           height: 52,
           decoration: BoxDecoration(
-            gradient: AppColors.primaryGrad,
+            color: AppColors.primary,
             borderRadius: BorderRadius.circular(14),
           ),
           child: const Center(
-            child: Text('Done', style: TextStyle(
-              color: Colors.white, fontWeight: FontWeight.w700, fontSize: 15,
-            )),
+            child: Text('Done',
+                style: TextStyle(
+                    color: Colors.white,
+                    fontWeight: FontWeight.w700,
+                    fontSize: 15)),
           ),
         ),
       ),
     ]).animate().fadeIn(),
   );
 
+  // ── Review card ────────────────────────────────────────────────────────────
+
   Widget _buildReviewCard() {
-    final card = _current;
+    final card     = _current;
     final progress = (_currentIndex + 1) / _queue.length;
 
     return Padding(
       padding: const EdgeInsets.all(20),
       child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-
         // Progress bar
         ClipRRect(
           borderRadius: BorderRadius.circular(4),
           child: LinearProgressIndicator(
-            value: progress,
+            value:           progress,
             backgroundColor: AppColors.border,
-            color: AppColors.primary,
-            minHeight: 4,
+            color:           AppColors.primary,
+            minHeight:       4,
           ),
         ),
-
         const SizedBox(height: 24),
 
-        // Flip card
+        // Card
         Expanded(
           child: GestureDetector(
             onTap: _revealed ? null : _reveal,
             child: AnimatedBuilder(
               animation: _flipAnim,
               builder: (_, __) {
-                final angle  = _flipAnim.value * math.pi;
-                final isBack = _flipAnim.value >= 0.5;
+                final angle     = _flipAnim.value * math.pi;
+                final isBack    = _flipAnim.value >= 0.5;
                 final faceAngle = isBack ? angle - math.pi : angle;
-
                 return Transform(
                   alignment: Alignment.center,
                   transform: Matrix4.identity()
@@ -298,18 +409,18 @@ class _SrReviewScreenState extends State<SrReviewScreen>
                     ..rotateY(faceAngle),
                   child: isBack
                       ? _CardFace(
-                          label: 'ANSWER',
-                          text: card.back,
-                          color: AppColors.accentGreen,
-                          isBack: true,
-                        )
+                    label:  'ANSWER',
+                    text:   card.back,
+                    color:  AppColors.accentGreen,
+                    isBack: true,
+                  )
                       : _CardFace(
-                          label: 'TERM',
-                          text: card.front,
-                          color: AppColors.primary,
-                          isBack: false,
-                          hint: 'Tap to reveal answer',
-                        ),
+                    label:  'QUESTION',
+                    text:   card.front,
+                    color:  AppColors.primary,
+                    isBack: false,
+                    hint:   'Tap to reveal answer',
+                  ),
                 );
               },
             ),
@@ -318,29 +429,49 @@ class _SrReviewScreenState extends State<SrReviewScreen>
 
         const SizedBox(height: 20),
 
-        // Rating buttons — shown only after reveal
+        // Rating buttons
         AnimatedOpacity(
-          opacity: _revealed ? 1.0 : 0.0,
-          duration: const Duration(milliseconds: 300),
+          opacity:  _revealed ? 1.0 : 0.0,
+          duration: const Duration(milliseconds: 200),
           child: IgnorePointer(
             ignoring: !_revealed,
             child: Column(children: [
-              Text('How well did you remember?',
+              Text('Rate your recall',
                   textAlign: TextAlign.center,
-                  style: AppText.caption.copyWith(fontWeight: FontWeight.w600)),
-              const SizedBox(height: 12),
+                  style: TextStyle(
+                      fontSize: 12,
+                      fontWeight: FontWeight.w600,
+                      color: AppColors.textSecond,
+                      letterSpacing: 0.2)),
+              const SizedBox(height: 10),
               Row(children: [
-                _RatingButton(label: 'Again', sublabel: 'Forgot',
-                    color: AppColors.accentRed,    quality: 1, onTap: _rate),
-                const SizedBox(width: 8),
-                _RatingButton(label: 'Hard',  sublabel: 'Difficult',
-                    color: AppColors.accentAmber,  quality: 2, onTap: _rate),
-                const SizedBox(width: 8),
-                _RatingButton(label: 'Good',  sublabel: 'Correct',
-                    color: AppColors.accentGreen,  quality: 3, onTap: _rate),
-                const SizedBox(width: 8),
-                _RatingButton(label: 'Easy',  sublabel: 'Perfect',
-                    color: AppColors.accentBlue,   quality: 5, onTap: _rate),
+                _RatingButton(
+                    label: 'Again',
+                    sublabel: 'Forgot',
+                    color: AppColors.accentRed,
+                    quality: 1,
+                    onTap: _rate),
+                const SizedBox(width: 4),
+                _RatingButton(
+                    label: 'Hard',
+                    sublabel: 'Difficult',
+                    color: AppColors.accentAmber,
+                    quality: 2,
+                    onTap: _rate),
+                const SizedBox(width: 4),
+                _RatingButton(
+                    label: 'Good',
+                    sublabel: 'Correct',
+                    color: AppColors.accentGreen,
+                    quality: 3,
+                    onTap: _rate),
+                const SizedBox(width: 4),
+                _RatingButton(
+                    label: 'Easy',
+                    sublabel: 'Perfect',
+                    color: AppColors.accentBlue,
+                    quality: 5,
+                    onTap: _rate),
               ]),
             ]),
           ),
@@ -352,7 +483,7 @@ class _SrReviewScreenState extends State<SrReviewScreen>
   }
 }
 
-// ── Sub-widgets ───────────────────────────────────────────────────────────────
+// ── Card face ─────────────────────────────────────────────────────────────────
 
 class _CardFace extends StatelessWidget {
   final String  label;
@@ -374,41 +505,71 @@ class _CardFace extends StatelessWidget {
     width: double.infinity,
     padding: const EdgeInsets.all(24),
     decoration: BoxDecoration(
-      color: isBack ? AppColors.accentGreen.withOpacity(0.05) : AppColors.surface,
+      color: isBack
+          ? AppColors.accentGreen.withOpacity(0.04)
+          : AppColors.surface,
       borderRadius: BorderRadius.circular(24),
-      border: Border.all(color: color.withOpacity(0.35), width: 1.5),
+      border: Border.all(color: color.withOpacity(0.30), width: 1.5),
     ),
     child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      // Label chip
       Container(
         padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
         decoration: BoxDecoration(
-          color: color.withOpacity(0.12),
+          color: color.withOpacity(0.10),
           borderRadius: BorderRadius.circular(6),
         ),
         child: Text(label,
-            style: AppText.label.copyWith(color: color, fontWeight: FontWeight.w700)),
+            style: TextStyle(
+                fontSize: 10,
+                fontWeight: FontWeight.w700,
+                color: color,
+                letterSpacing: 0.8)),
       ),
       const Spacer(),
+      // Card text
       Text(text,
-          style: AppText.subheading.copyWith(
-            height: 1.5,
-            fontWeight: isBack ? FontWeight.w400 : FontWeight.w700,
-          )),
+          style: TextStyle(
+              fontSize: 18,
+              height: 1.55,
+              fontWeight: isBack ? FontWeight.w400 : FontWeight.w700,
+              color: AppColors.textPrimary)),
       const Spacer(),
+      // Hint / flip indicator
       if (hint != null)
         Center(
-          child: Text(hint!,
-              style: AppText.label.copyWith(color: AppColors.textMuted)),
+          child: Row(mainAxisSize: MainAxisSize.min, children: [
+            Icon(Icons.touch_app_outlined,
+                size: 13, color: AppColors.textSecond),
+            const SizedBox(width: 5),
+            Text(hint!,
+                style: TextStyle(
+                    fontSize: 12,
+                    color: AppColors.textSecond)),
+          ]),
+        )
+      else
+        Center(
+          child: Row(mainAxisSize: MainAxisSize.min, children: [
+            Icon(Icons.flip_rounded, size: 13, color: AppColors.textSecond),
+            const SizedBox(width: 5),
+            Text('tap to flip back',
+                style: TextStyle(
+                    fontSize: 12,
+                    color: AppColors.textSecond)),
+          ]),
         ),
     ]),
   );
 }
 
+// ── Rating button ─────────────────────────────────────────────────────────────
+
 class _RatingButton extends StatelessWidget {
-  final String   label;
-  final String   sublabel;
-  final Color    color;
-  final int      quality;
+  final String             label;
+  final String             sublabel;
+  final Color              color;
+  final int                quality;
   final void Function(int) onTap;
 
   const _RatingButton({
@@ -423,45 +584,67 @@ class _RatingButton extends StatelessWidget {
   Widget build(BuildContext context) => Expanded(
     child: GestureDetector(
       onTap: () => onTap(quality),
+      behavior: HitTestBehavior.opaque,
       child: Container(
-        padding: const EdgeInsets.symmetric(vertical: 12),
+        padding: const EdgeInsets.symmetric(vertical: 11),
         decoration: BoxDecoration(
-          color: color.withOpacity(0.10),
+          color:        color.withOpacity(0.08),
           borderRadius: BorderRadius.circular(12),
-          border: Border.all(color: color.withOpacity(0.3)),
+          border:       Border.all(color: color.withOpacity(0.25)),
         ),
         child: Column(children: [
           Text(label,
               style: TextStyle(
-                fontSize: 13, fontWeight: FontWeight.w700, color: color)),
+                  fontSize: 13,
+                  fontWeight: FontWeight.w700,
+                  color: color)),
+          const SizedBox(height: 1),
           Text(sublabel,
-              style: TextStyle(fontSize: 10, color: color.withOpacity(0.7))),
+              style: TextStyle(
+                  fontSize: 10,
+                  color: color.withOpacity(0.65))),
         ]),
       ),
     ),
   );
 }
 
-class _SummaryRow extends StatelessWidget {
-  final String label;
-  final int    count;
-  final Color  color;
+// ── Summary row ───────────────────────────────────────────────────────────────
 
-  const _SummaryRow({required this.label, required this.count, required this.color});
+class _SummaryRow extends StatelessWidget {
+  final IconData icon;
+  final String   label;
+  final int      count;
+  final Color    color;
+
+  const _SummaryRow({
+    required this.icon,
+    required this.label,
+    required this.count,
+    required this.color,
+  });
 
   @override
-  Widget build(BuildContext context) => Padding(
-    padding: const EdgeInsets.symmetric(vertical: 6),
-    child: Row(children: [
-      Container(
-        width: 12, height: 12,
-        decoration: BoxDecoration(color: color, shape: BoxShape.circle),
+  Widget build(BuildContext context) => Row(children: [
+    Container(
+      width: 32, height: 32,
+      decoration: BoxDecoration(
+        color: color.withOpacity(0.10),
+        borderRadius: BorderRadius.circular(8),
       ),
-      const SizedBox(width: 12),
-      Text(label, style: AppText.body),
-      const Spacer(),
-      Text('$count', style: AppText.body.copyWith(
-          color: color, fontWeight: FontWeight.w700)),
-    ]),
-  );
+      child: Icon(icon, size: 16, color: color),
+    ),
+    const SizedBox(width: 12),
+    Text(label,
+        style: TextStyle(
+            fontSize: 14,
+            fontWeight: FontWeight.w500,
+            color: AppColors.textPrimary)),
+    const Spacer(),
+    Text('$count',
+        style: TextStyle(
+            fontSize: 16,
+            fontWeight: FontWeight.w800,
+            color: color)),
+  ]);
 }

@@ -237,3 +237,44 @@ def get_analytics_summary(user_id: str):
         },
         "study_streak": streak,
     }
+
+@router.get("/weekly-stats/{user_id}")
+def get_weekly_stats(user_id: str):
+    """
+    Returns questions and flashcards generated THIS week (Mon–Sun)
+    plus deltas vs. last week. Reads from the study_results table.
+    """
+    sb = get_supabase()
+
+    now   = datetime.utcnow()
+    # Start of current week (Monday 00:00 UTC)
+    week_start      = (now - timedelta(days=now.weekday())).replace(
+                          hour=0, minute=0, second=0, microsecond=0)
+    last_week_start = week_start - timedelta(days=7)
+
+    def _fetch(since: datetime, until: datetime):
+        rows = (
+            sb.table("results")
+              .select("quiz, flashcards")
+              .eq("user_id", user_id)
+              .gte("created_at", since.isoformat())
+              .lt("created_at", until.isoformat())
+              .execute()
+        )
+        total_q = 0
+        total_c = 0
+        for row in (rows.data or []):
+            total_q += len(row.get("quiz")       or [])
+            total_c += len(row.get("flashcards") or [])
+        return total_q, total_c
+
+    this_q,  this_c  = _fetch(week_start,      now)
+    prev_q,  prev_c  = _fetch(last_week_start,  week_start)
+
+    return {
+        "user_id":             user_id,
+        "questions_this_week": this_q,
+        "flashcards_this_week": this_c,
+        "questions_delta":     this_q - prev_q,   # positive = up vs last week
+        "flashcards_delta":    this_c - prev_c,
+    }

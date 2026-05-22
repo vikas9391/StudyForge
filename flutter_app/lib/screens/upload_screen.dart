@@ -1,4 +1,4 @@
-// lib/screens/upload_screen.dart  (V3)
+// lib/screens/upload_screen.dart  (V5 — professional icon-based UI)
 // Four input modes: PDF/DOCX, YouTube URL, Webpage URL, Camera OCR.
 // All modes feed into the same POST /process pipeline after ingestion.
 
@@ -7,6 +7,7 @@ import 'dart:math' as math;
 import 'package:confetti/confetti.dart';
 import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter_animate/flutter_animate.dart';
 import 'package:image_picker/image_picker.dart';
@@ -30,23 +31,19 @@ class _UploadScreenState extends State<UploadScreen>
   final _api  = ApiService();
   final _auth = AuthService();
 
-  // Selected input mode: 0=file, 1=youtube, 2=url, 3=ocr
   int _mode = 0;
 
-  // File mode
   File?   _file;
   String? _fileName;
   double  _fileSizeMb = 0;
 
-  // URL / YouTube mode
   final _urlCtrl = TextEditingController();
 
-  // State
   bool    _uploading  = false;
   bool    _processing = false;
   String  _statusMsg  = '';
   String? _error;
-  int     _step       = 0;   // 0=idle 1=upload 2=extract 3=generate 4=done
+  int     _step       = 0;
 
   bool    _isDragOver = false;
 
@@ -63,10 +60,10 @@ class _UploadScreenState extends State<UploadScreen>
   ];
 
   static const _modes = [
-    (icon: Icons.upload_file_rounded,   label: 'File'),
-    (icon: Icons.play_circle_rounded,   label: 'YouTube'),
-    (icon: Icons.language_rounded,      label: 'URL'),
-    (icon: Icons.camera_alt_rounded,    label: 'Scan'),
+    (icon: Icons.upload_file_rounded,  label: 'File'),
+    (icon: Icons.play_circle_rounded,  label: 'YouTube'),
+    (icon: Icons.language_rounded,     label: 'URL'),
+    (icon: Icons.camera_alt_rounded,   label: 'Scan'),
   ];
 
   @override
@@ -86,8 +83,6 @@ class _UploadScreenState extends State<UploadScreen>
     super.dispose();
   }
 
-  // ── Validation ────────────────────────────────────────────────────────────
-
   bool _validateFile(String path, String name, int sizeBytes) {
     final sizeMb = sizeBytes / (1024 * 1024);
     if (sizeMb > 10) {
@@ -99,11 +94,14 @@ class _UploadScreenState extends State<UploadScreen>
       setState(() => _error = 'Only PDF or DOCX files are supported.');
       return false;
     }
-    setState(() { _file = File(path); _fileName = name; _fileSizeMb = sizeMb; _error = null; });
+    setState(() {
+      _file = File(path);
+      _fileName = name;
+      _fileSizeMb = sizeMb;
+      _error = null;
+    });
     return true;
   }
-
-  // ── Pick file ─────────────────────────────────────────────────────────────
 
   Future<void> _pickFile() async {
     final result = await FilePicker.platform.pickFiles(
@@ -116,8 +114,6 @@ class _UploadScreenState extends State<UploadScreen>
     _validateFile(picked.path!, picked.name, picked.size);
   }
 
-  // ── Pick image for OCR ────────────────────────────────────────────────────
-
   Future<void> _pickImage() async {
     final picker = ImagePicker();
     final picked = await picker.pickImage(
@@ -129,31 +125,40 @@ class _UploadScreenState extends State<UploadScreen>
     setState(() { _file = f; _fileName = picked.name; _error = null; });
   }
 
-  // ── Run ingestion ─────────────────────────────────────────────────────────
-
   Future<void> _run() async {
+    HapticFeedback.lightImpact();
     String? uid = _auth.userId;
     if (uid == null) {
-      try { await Supabase.instance.client.auth.refreshSession(); uid = _auth.userId; }
-      catch (_) {}
+      try {
+        await Supabase.instance.client.auth.refreshSession();
+        uid = _auth.userId;
+      } catch (_) {}
     }
-    if (uid == null) { setState(() => _error = 'You must be signed in.'); return; }
+    if (uid == null) {
+      setState(() => _error = 'You must be signed in.');
+      return;
+    }
 
-    setState(() { _uploading = true; _step = 1; _error = null; _statusMsg = 'Uploading…'; });
+    setState(() {
+      _uploading = true;
+      _step = 1;
+      _error = null;
+      _statusMsg = 'Uploading…';
+    });
 
     try {
       Map<String, dynamic> ingestData;
 
       switch (_mode) {
-        case 0: // File
+        case 0:
           ingestData = await _api.uploadFile(file: _file!, userId: uid);
-        case 1: // YouTube
+        case 1:
           setState(() => _statusMsg = 'Fetching YouTube transcript…');
           ingestData = await _api.ingestYouTube(url: _urlCtrl.text.trim(), userId: uid);
-        case 2: // URL
+        case 2:
           setState(() => _statusMsg = 'Scraping webpage…');
           ingestData = await _api.ingestUrl(url: _urlCtrl.text.trim(), userId: uid);
-        case 3: // OCR
+        case 3:
           setState(() => _statusMsg = 'Running OCR on image…');
           ingestData = await _api.ingestOcr(imageFile: _file!, userId: uid);
         default:
@@ -168,11 +173,17 @@ class _UploadScreenState extends State<UploadScreen>
       await Future.delayed(const Duration(milliseconds: 600));
       if (!mounted) return;
 
-      setState(() { _uploading = false; _processing = true; _step = 3;
-        _statusMsg = 'AI is generating your study materials… (30–60 s)'; });
+      setState(() {
+        _uploading = false;
+        _processing = true;
+        _step = 3;
+        _statusMsg = 'AI is generating your study materials… (30–60 s)';
+      });
 
       final studyResult = await _api.processDocument(
-        resultId: resultId, extractedText: extractedText, userId: uid,
+        resultId: resultId,
+        extractedText: extractedText,
+        userId: uid,
       );
 
       if (!mounted) return;
@@ -188,7 +199,13 @@ class _UploadScreenState extends State<UploadScreen>
           slideRoute(ResultsScreen(resultId: studyResult.resultId)));
     } catch (e) {
       if (!mounted) return;
-      setState(() { _error = e.toString(); _uploading = false; _processing = false; _step = 0; _statusMsg = ''; });
+      setState(() {
+        _error = e.toString();
+        _uploading = false;
+        _processing = false;
+        _step = 0;
+        _statusMsg = '';
+      });
     }
   }
 
@@ -198,51 +215,39 @@ class _UploadScreenState extends State<UploadScreen>
     return _urlCtrl.text.trim().isNotEmpty;
   }
 
-  // ── Build ─────────────────────────────────────────────────────────────────
-
   @override
   Widget build(BuildContext context) {
     return Stack(
       children: [
         Scaffold(
-          appBar: AppBar(
-            leading: BackButton(color: AppColors.textSecond),
-            title: Text('New Session', style: AppText.subheading),
-          ),
-          body: Container(
-            decoration: const BoxDecoration(gradient: AppColors.bgGrad),
+          backgroundColor: const Color(0xFFF0EDE8),
+          body: SafeArea(
             child: Column(
               children: [
                 _buildOfflineBanner(),
+                _buildHeader(context),
                 Expanded(
                   child: SingleChildScrollView(
-                    padding: const EdgeInsets.all(20),
+                    padding: const EdgeInsets.fromLTRB(14, 0, 14, 20),
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.stretch,
                       children: [
-                        _buildModePicker(),
                         const SizedBox(height: 16),
-
-                        // Mode-specific input
-                        if (_mode == 0) _buildFilePicker(),
-                        if (_mode == 1) _buildUrlField('Paste YouTube URL', 'https://youtube.com/watch?v=...'),
-                        if (_mode == 2) _buildUrlField('Paste webpage URL', 'https://en.wikipedia.org/wiki/...'),
-                        if (_mode == 3) _buildOcrPicker(),
-
+                        _buildModePicker(),
+                        const SizedBox(height: 14),
+                        _buildInputArea(),
                         if (_error != null) ...[
                           const SizedBox(height: 12),
                           _buildErrorCard(),
                         ],
-
                         if (_busy || _step == 4) ...[
-                          const SizedBox(height: 16),
+                          const SizedBox(height: 14),
                           _buildStepProgress(),
                         ],
-
-                        const SizedBox(height: 20),
+                        const SizedBox(height: 14),
                         _buildCTA(),
-                        const SizedBox(height: 20),
-                        _buildTips(),
+                        const SizedBox(height: 14),
+                        _buildTipsCard(),
                         const SizedBox(height: 20),
                       ],
                     ),
@@ -262,22 +267,106 @@ class _UploadScreenState extends State<UploadScreen>
             maxBlastForce: 20,
             minBlastForce: 8,
             gravity: 0.2,
-            colors: const [Color(0xFF6C63FF), Color(0xFF4FC3F7),
-                Color(0xFF81C784), Color(0xFFFFB74D), Color(0xFFF06292)],
+            colors: const [
+              Color(0xFF6C63FF), Color(0xFF4FC3F7),
+              Color(0xFF81C784), Color(0xFFFFB74D), Color(0xFFF06292),
+            ],
           ),
         ),
       ],
     );
   }
 
-  // ── Mode picker ───────────────────────────────────────────────────────────
+  Widget _buildOfflineBanner() {
+    return AnimatedContainer(
+      duration: const Duration(milliseconds: 350),
+      curve: Curves.easeInOut,
+      height: _isOffline ? 40 : 0,
+      color: AppColors.accentRed.withOpacity(0.90),
+      child: _isOffline
+          ? Row(mainAxisAlignment: MainAxisAlignment.center, children: [
+        const Icon(Icons.wifi_off_rounded, color: Colors.white, size: 15),
+        const SizedBox(width: 8),
+        const Text(
+          "You're offline — uploads unavailable",
+          style: TextStyle(
+              color: Colors.white,
+              fontSize: 13,
+              fontWeight: FontWeight.w500),
+        ),
+      ])
+          : null,
+    );
+  }
+
+  Widget _buildHeader(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(20, 20, 20, 0),
+      child: Row(
+        children: [
+          GestureDetector(
+            onTap: () => Navigator.of(context).pop(),
+            child: Container(
+              width: 40, height: 40,
+              decoration: BoxDecoration(
+                shape: BoxShape.circle,
+                color: AppColors.surface,
+                border: Border.all(color: AppColors.border),
+              ),
+              child: Center(
+                child: Icon(Icons.arrow_back_ios_new_rounded,
+                    size: 16, color: AppColors.textSecond),
+              ),
+            ),
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text('CREATE',
+                    style: TextStyle(
+                        fontSize: 11,
+                        color: AppColors.textSecond,
+                        fontWeight: FontWeight.w400,
+                        letterSpacing: 0.4)),
+                const SizedBox(height: 1),
+                Text('New Session',
+                    style: TextStyle(
+                        fontSize: 17,
+                        fontWeight: FontWeight.w700,
+                        color: AppColors.textPrimary,
+                        letterSpacing: -0.3)),
+              ],
+            ),
+          ),
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+            decoration: BoxDecoration(
+              color: AppColors.primaryGlow,
+              borderRadius: BorderRadius.circular(20),
+            ),
+            child: Row(mainAxisSize: MainAxisSize.min, children: [
+              Icon(_modes[_mode].icon, size: 12, color: AppColors.primary),
+              const SizedBox(width: 4),
+              Text(_modes[_mode].label,
+                  style: TextStyle(
+                      fontSize: 11,
+                      fontWeight: FontWeight.w700,
+                      color: AppColors.primary)),
+            ]),
+          ),
+        ],
+      ),
+    ).animate().fadeIn(duration: 400.ms).slideY(begin: -0.06);
+  }
 
   Widget _buildModePicker() {
     return Container(
-      padding: const EdgeInsets.all(4),
+      padding: const EdgeInsets.all(5),
       decoration: BoxDecoration(
         color: AppColors.surface,
-        borderRadius: BorderRadius.circular(16),
+        borderRadius: BorderRadius.circular(18),
         border: Border.all(color: AppColors.border),
       ),
       child: Row(
@@ -285,16 +374,25 @@ class _UploadScreenState extends State<UploadScreen>
           final selected = i == _mode;
           return Expanded(
             child: GestureDetector(
-              onTap: _busy ? null : () => setState(() {
-                _mode = i; _file = null; _fileName = null;
-                _urlCtrl.clear(); _error = null;
-              }),
+              onTap: _busy
+                  ? null
+                  : () {
+                HapticFeedback.selectionClick();
+                setState(() {
+                  _mode = i;
+                  _file = null;
+                  _fileName = null;
+                  _urlCtrl.clear();
+                  _error = null;
+                });
+              },
               child: AnimatedContainer(
-                duration: const Duration(milliseconds: 200),
-                padding: const EdgeInsets.symmetric(vertical: 10),
+                duration: const Duration(milliseconds: 220),
+                curve: Curves.easeInOut,
+                padding: const EdgeInsets.symmetric(vertical: 11),
                 decoration: BoxDecoration(
-                  gradient: selected ? AppColors.primaryGrad : null,
-                  borderRadius: BorderRadius.circular(12),
+                  color: selected ? AppColors.ctaBlue : Colors.transparent,
+                  borderRadius: BorderRadius.circular(13),
                 ),
                 child: Column(children: [
                   Icon(_modes[i].icon,
@@ -303,125 +401,258 @@ class _UploadScreenState extends State<UploadScreen>
                   const SizedBox(height: 4),
                   Text(_modes[i].label,
                       style: TextStyle(
-                        fontSize: 11, fontWeight: FontWeight.w600,
-                        color: selected ? Colors.white : AppColors.textSecond,
-                      )),
+                          fontSize: 11,
+                          fontWeight: FontWeight.w600,
+                          color: selected ? Colors.white : AppColors.textSecond)),
                 ]),
               ),
             ),
           );
         }),
       ),
-    ).animate().fadeIn();
+    ).animate().fadeIn(delay: 80.ms, duration: 400.ms);
   }
 
-  // ── File drop zone ────────────────────────────────────────────────────────
+  Widget _buildInputArea() {
+    return AnimatedSwitcher(
+      duration: const Duration(milliseconds: 250),
+      switchInCurve: Curves.easeOut,
+      switchOutCurve: Curves.easeIn,
+      transitionBuilder: (child, anim) =>
+          FadeTransition(opacity: anim,
+              child: SlideTransition(
+                  position: Tween(
+                      begin: const Offset(0, 0.06),
+                      end: Offset.zero).animate(anim),
+                  child: child)),
+      child: KeyedSubtree(
+        key: ValueKey(_mode),
+        child: switch (_mode) {
+          0 => _buildFilePicker(),
+          1 => _buildUrlField('YouTube URL',
+              'https://youtube.com/watch?v=...', Icons.play_circle_rounded),
+          2 => _buildUrlField('Webpage URL',
+              'https://en.wikipedia.org/wiki/...', Icons.language_rounded),
+          3 => _buildOcrPicker(),
+          _ => const SizedBox.shrink(),
+        },
+      ),
+    );
+  }
 
   Widget _buildFilePicker() {
     final hasFile = _file != null;
-    return Column(children: [
-      DragTarget<String>(
-        onWillAcceptWithDetails: (_) { setState(() => _isDragOver = true); return true; },
-        onLeave: (_) => setState(() => _isDragOver = false),
-        onAcceptWithDetails: (d) {
-          setState(() => _isDragOver = false);
-          final f = File(d.data);
-          _validateFile(d.data, d.data.split(Platform.pathSeparator).last, f.lengthSync());
-        },
-        builder: (_, __, ___) => GestureDetector(
-          onTap: _busy ? null : _pickFile,
-          child: AnimatedContainer(
-            duration: const Duration(milliseconds: 250),
-            height: 180,
-            decoration: BoxDecoration(
-              color: _isDragOver
-                  ? AppColors.accentAmber.withOpacity(0.08)
-                  : hasFile
-                      ? AppColors.primary.withOpacity(0.06)
-                      : AppColors.surfaceCard,
-              borderRadius: BorderRadius.circular(20),
-              border: Border.all(
-                  color: _isDragOver ? AppColors.accentAmber
-                      : hasFile ? AppColors.primary : AppColors.border,
-                  width: 1.5),
+    return DragTarget<String>(
+      onWillAcceptWithDetails: (_) {
+        setState(() => _isDragOver = true);
+        return true;
+      },
+      onLeave: (_) => setState(() => _isDragOver = false),
+      onAcceptWithDetails: (d) {
+        setState(() => _isDragOver = false);
+        final f = File(d.data);
+        _validateFile(
+            d.data, d.data.split(Platform.pathSeparator).last, f.lengthSync());
+      },
+      builder: (_, __, ___) => GestureDetector(
+        onTap: _busy ? null : _pickFile,
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 250),
+          padding: const EdgeInsets.all(20),
+          decoration: BoxDecoration(
+            color: _isDragOver
+                ? AppColors.accentAmber.withOpacity(0.06)
+                : hasFile
+                ? AppColors.primaryGlow
+                : AppColors.surface,
+            borderRadius: BorderRadius.circular(18),
+            border: Border.all(
+                color: _isDragOver
+                    ? AppColors.accentAmber
+                    : hasFile
+                    ? AppColors.primary.withOpacity(0.4)
+                    : AppColors.border,
+                width: hasFile ? 1.5 : 1),
+          ),
+          child: hasFile
+              ? Row(children: [
+            Container(
+              width: 44, height: 44,
+              decoration: BoxDecoration(
+                color: AppColors.primary.withOpacity(0.12),
+                borderRadius: BorderRadius.circular(12),
+              ),
+              child: const Center(
+                child: Icon(Icons.insert_drive_file_outlined,
+                    size: 22, color: AppColors.primary),
+              ),
             ),
-            child: Center(
-              child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [
-                Icon(
-                  _isDragOver ? Icons.file_download_rounded
-                      : hasFile ? Icons.check_circle_rounded
-                      : Icons.upload_file_rounded,
-                  size: 48,
-                  color: _isDragOver ? AppColors.accentAmber
-                      : hasFile ? AppColors.accentGreen : AppColors.textMuted,
-                ),
-                const SizedBox(height: 12),
-                Text(
-                  _isDragOver ? 'Drop it here!'
-                      : hasFile ? _fileName!
-                      : 'Tap to select · or drag & drop',
-                  style: AppText.body.copyWith(fontWeight: FontWeight.w600,
-                      color: hasFile ? AppColors.accentGreen : AppColors.textPrimary),
-                ),
-                const SizedBox(height: 4),
-                Text('PDF or DOCX · Max 10 MB', style: AppText.caption),
-              ]),
+            const SizedBox(width: 14),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(_fileName!,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                          fontSize: 13,
+                          fontWeight: FontWeight.w600,
+                          color: AppColors.textPrimary)),
+                  const SizedBox(height: 3),
+                  Text('${_fileSizeMb.toStringAsFixed(1)} MB · Ready to process',
+                      style: TextStyle(
+                          fontSize: 11,
+                          color: AppColors.textSecond)),
+                ],
+              ),
             ),
+            if (!_busy)
+              GestureDetector(
+                onTap: () => setState(() {
+                  _file = null;
+                  _fileName = null;
+                }),
+                child: Container(
+                  width: 28, height: 28,
+                  decoration: BoxDecoration(
+                    color: AppColors.surface,
+                    shape: BoxShape.circle,
+                    border: Border.all(color: AppColors.border),
+                  ),
+                  child: Icon(Icons.close_rounded,
+                      size: 14, color: AppColors.textSecond),
+                ),
+              ),
+          ])
+              : Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Container(
+                width: 52, height: 52,
+                decoration: BoxDecoration(
+                  color: _isDragOver
+                      ? AppColors.accentAmber.withOpacity(0.12)
+                      : AppColors.primaryGlow,
+                  borderRadius: BorderRadius.circular(14),
+                ),
+                child: Center(
+                  child: Icon(
+                    _isDragOver
+                        ? Icons.file_download_rounded
+                        : Icons.upload_file_rounded,
+                    size: 26,
+                    color: _isDragOver
+                        ? AppColors.accentAmber
+                        : AppColors.primary,
+                  ),
+                ),
+              ),
+              const SizedBox(height: 14),
+              Text(
+                _isDragOver ? 'Drop it here!' : 'Tap to select a file',
+                style: TextStyle(
+                    fontSize: 14,
+                    fontWeight: FontWeight.w700,
+                    color: AppColors.textPrimary),
+              ),
+              const SizedBox(height: 4),
+              Text('PDF or DOCX · Max 10 MB',
+                  style: TextStyle(
+                      fontSize: 12, color: AppColors.textSecond)),
+              const SizedBox(height: 16),
+              Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  _TypePill(label: 'PDF',  icon: Icons.picture_as_pdf_outlined),
+                  const SizedBox(width: 8),
+                  _TypePill(label: 'DOC',  icon: Icons.description_outlined),
+                  const SizedBox(width: 8),
+                  _TypePill(label: 'DOCX', icon: Icons.description_rounded),
+                ],
+              ),
+            ],
           ),
         ),
       ),
-      if (hasFile && !_busy) ...[
-        const SizedBox(height: 8),
-        Align(
-          alignment: Alignment.centerRight,
-          child: TextButton.icon(
-            onPressed: () => setState(() { _file = null; _fileName = null; }),
-            icon: const Icon(Icons.close_rounded, size: 14),
-            label: const Text('Remove'),
-            style: TextButton.styleFrom(foregroundColor: AppColors.textSecond),
-          ),
-        ),
-      ],
-    ]);
+    );
   }
 
-  // ── URL / YouTube field ───────────────────────────────────────────────────
-
-  Widget _buildUrlField(String hint, String placeholder) {
-    return TextField(
-      controller: _urlCtrl,
-      enabled: !_busy,
-      style: TextStyle(color: AppColors.textPrimary),
-      keyboardType: TextInputType.url,
-      decoration: InputDecoration(
-        hintText: placeholder,
-        hintStyle: TextStyle(color: AppColors.textMuted, fontSize: 13),
-        labelText: hint,
-        labelStyle: TextStyle(color: AppColors.textSecond),
-        filled: true,
-        fillColor: AppColors.surface,
-        prefixIcon: Icon(
-          _mode == 1 ? Icons.play_circle_rounded : Icons.language_rounded,
-          color: AppColors.primary, size: 20,
-        ),
-        border: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(14),
-          borderSide: BorderSide(color: AppColors.border),
-        ),
-        focusedBorder: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(14),
-          borderSide: BorderSide(color: AppColors.primary, width: 1.5),
-        ),
-        enabledBorder: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(14),
-          borderSide: BorderSide(color: AppColors.border),
-        ),
+  Widget _buildUrlField(String label, String placeholder, IconData prefixIcon) {
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: AppColors.surface,
+        borderRadius: BorderRadius.circular(18),
+        border: Border.all(color: AppColors.border),
       ),
-      onChanged: (_) => setState(() {}),
-    ).animate().fadeIn().slideY(begin: 0.1);
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(label.toUpperCase(),
+              style: TextStyle(
+                  fontSize: 10,
+                  fontWeight: FontWeight.w700,
+                  color: AppColors.textSecond,
+                  letterSpacing: 0.5)),
+          const SizedBox(height: 10),
+          TextField(
+            controller: _urlCtrl,
+            enabled: !_busy,
+            style: TextStyle(color: AppColors.textPrimary, fontSize: 14),
+            keyboardType: TextInputType.url,
+            decoration: InputDecoration(
+              hintText: placeholder,
+              hintStyle: TextStyle(color: AppColors.textSecond.withOpacity(0.5), fontSize: 13),
+              filled: true,
+              fillColor: const Color(0xFFF0EDE8),
+              prefixIcon: Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 12),
+                child: Icon(prefixIcon, color: AppColors.primary, size: 18),
+              ),
+              prefixIconConstraints: const BoxConstraints(minWidth: 44),
+              contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 13),
+              border: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(12),
+                borderSide: BorderSide(color: AppColors.border),
+              ),
+              enabledBorder: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(12),
+                borderSide: BorderSide(color: AppColors.border),
+              ),
+              focusedBorder: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(12),
+                borderSide: BorderSide(color: AppColors.primary, width: 1.5),
+              ),
+            ),
+            onChanged: (_) => setState(() {}),
+          ),
+          if (_urlCtrl.text.trim().isNotEmpty) ...[
+            const SizedBox(height: 10),
+            Row(children: [
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                decoration: BoxDecoration(
+                  color: AppColors.primaryGlow,
+                  borderRadius: BorderRadius.circular(20),
+                ),
+                child: Row(mainAxisSize: MainAxisSize.min, children: [
+                  Icon(Icons.check_circle_rounded,
+                      size: 11, color: AppColors.primary),
+                  const SizedBox(width: 4),
+                  Text('URL entered',
+                      style: TextStyle(
+                          fontSize: 10,
+                          fontWeight: FontWeight.w600,
+                          color: AppColors.primary)),
+                ]),
+              ),
+            ]),
+          ],
+        ],
+      ),
+    );
   }
-
-  // ── OCR camera picker ─────────────────────────────────────────────────────
 
   Widget _buildOcrPicker() {
     final hasImage = _file != null;
@@ -429,179 +660,394 @@ class _UploadScreenState extends State<UploadScreen>
       onTap: _busy ? null : _pickImage,
       child: AnimatedContainer(
         duration: const Duration(milliseconds: 250),
-        height: 180,
+        padding: const EdgeInsets.all(20),
         decoration: BoxDecoration(
-          color: hasImage ? AppColors.accentGreen.withOpacity(0.06) : AppColors.surfaceCard,
-          borderRadius: BorderRadius.circular(20),
+          color: hasImage
+              ? AppColors.accentGreen.withOpacity(0.06)
+              : AppColors.surface,
+          borderRadius: BorderRadius.circular(18),
           border: Border.all(
-              color: hasImage ? AppColors.accentGreen : AppColors.border, width: 1.5),
+              color: hasImage
+                  ? AppColors.accentGreen.withOpacity(0.5)
+                  : AppColors.border,
+              width: hasImage ? 1.5 : 1),
         ),
-        child: Center(
-          child: hasImage
-              ? Column(mainAxisSize: MainAxisSize.min, children: [
-                  ClipRRect(
-                    borderRadius: BorderRadius.circular(12),
-                    child: Image.file(_file!, height: 110, fit: BoxFit.cover),
-                  ),
-                  const SizedBox(height: 8),
-                  Text('Image selected — tap to change',
-                      style: AppText.caption),
-                ])
-              : Column(mainAxisAlignment: MainAxisAlignment.center, children: [
-                  const Icon(Icons.camera_alt_rounded,
-                      size: 48, color: AppColors.textMuted),
-                  const SizedBox(height: 12),
-                  Text('Take a photo of handwritten notes',
-                      style: AppText.body.copyWith(fontWeight: FontWeight.w600)),
-                  const SizedBox(height: 4),
-                  Text('JPEG or PNG · Max 10 MB', style: AppText.caption),
-                ]),
-        ),
-      ),
-    ).animate().fadeIn().slideY(begin: 0.1);
-  }
-
-  Widget _buildOfflineBanner() => AnimatedContainer(
-    duration: const Duration(milliseconds: 350),
-    height: _isOffline ? 44 : 0,
-    color: AppColors.accentRed.withOpacity(0.92),
-    child: _isOffline
-        ? Row(mainAxisAlignment: MainAxisAlignment.center, children: [
-            const Icon(Icons.wifi_off_rounded, color: Colors.white, size: 16),
-            const SizedBox(width: 8),
-            Text('You\'re offline — uploads unavailable',
-                style: AppText.label.copyWith(color: Colors.white)),
-          ])
-        : null,
-  );
-
-  Widget _buildErrorCard() => Container(
-    padding: const EdgeInsets.all(14),
-    decoration: BoxDecoration(
-      color: AppColors.accentRed.withOpacity(0.07),
-      borderRadius: BorderRadius.circular(12),
-      border: Border.all(color: AppColors.accentRed.withOpacity(0.3)),
-    ),
-    child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
-      const Icon(Icons.warning_amber_rounded, color: AppColors.accentRed, size: 18),
-      const SizedBox(width: 10),
-      Expanded(child: Text(_error!,
-          style: AppText.caption.copyWith(color: AppColors.accentRed))),
-    ]),
-  );
-
-  Widget _buildStepProgress() {
-    return Container(
-      padding: const EdgeInsets.all(18),
-      decoration: cardDecoration(),
-      child: Column(children: [
-        if (_statusMsg.isNotEmpty) ...[
-          Row(children: [
-            if (_step < 4)
-              SizedBox(width: 18, height: 18,
-                  child: CircularProgressIndicator(strokeWidth: 2.5,
-                      color: _step == 3 ? AppColors.accentAmber : AppColors.primary))
-            else
-              const Icon(Icons.check_circle_rounded, color: AppColors.accentGreen, size: 18),
-            const SizedBox(width: 12),
-            Expanded(child: Text(_statusMsg, style: AppText.bodySmall)),
-          ]),
-          const SizedBox(height: 20),
-        ],
-        Row(children: List.generate(_steps.length, (i) {
-          final stepNum = i + 1;
-          final isDone   = _step > stepNum;
-          final isActive = _step == stepNum;
-          final color = isDone ? AppColors.accentGreen
-              : isActive ? AppColors.primary : AppColors.border;
-          final bg = isDone ? AppColors.accentGreen.withOpacity(0.12)
-              : isActive ? AppColors.primary.withOpacity(0.10) : AppColors.surface;
-          return Expanded(
-            child: Row(children: [
-              Expanded(
-                child: AnimatedContainer(
-                  duration: const Duration(milliseconds: 400),
-                  padding: const EdgeInsets.symmetric(vertical: 8),
+        child: hasImage
+            ? Row(children: [
+          ClipRRect(
+            borderRadius: BorderRadius.circular(10),
+            child: Image.file(_file!,
+                width: 64, height: 64, fit: BoxFit.cover),
+          ),
+          const SizedBox(width: 14),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text('Image selected',
+                    style: TextStyle(
+                        fontSize: 13,
+                        fontWeight: FontWeight.w600,
+                        color: AppColors.textPrimary)),
+                const SizedBox(height: 3),
+                Text('Tap to change photo',
+                    style: TextStyle(
+                        fontSize: 11, color: AppColors.textSecond)),
+                const SizedBox(height: 8),
+                Container(
+                  padding: const EdgeInsets.symmetric(
+                      horizontal: 8, vertical: 3),
                   decoration: BoxDecoration(
-                    color: bg,
-                    borderRadius: BorderRadius.circular(10),
-                    border: Border.all(color: color.withOpacity(0.4)),
+                    color: AppColors.accentGreen.withOpacity(0.12),
+                    borderRadius: BorderRadius.circular(20),
                   ),
-                  child: Column(children: [
-                    Icon(isDone ? Icons.check_rounded : _steps[i].icon,
-                        size: 16,
-                        color: isDone ? AppColors.accentGreen
-                            : isActive ? AppColors.primary : AppColors.textMuted),
-                    const SizedBox(height: 4),
-                    Text(_steps[i].label,
-                        style: TextStyle(fontSize: 10, fontWeight: FontWeight.w600,
-                            color: isDone ? AppColors.accentGreen
-                                : isActive ? AppColors.primary : AppColors.textMuted)),
+                  child: Row(mainAxisSize: MainAxisSize.min, children: [
+                    Icon(Icons.check_circle_rounded,
+                        size: 11,
+                        color: AppColors.accentGreen),
+                    const SizedBox(width: 4),
+                    Text('Ready for OCR',
+                        style: TextStyle(
+                            fontSize: 10,
+                            fontWeight: FontWeight.w600,
+                            color: AppColors.accentGreen)),
                   ]),
                 ),
-              ),
-              if (i < _steps.length - 1)
-                AnimatedContainer(duration: const Duration(milliseconds: 400),
-                    width: 8, height: 2,
-                    color: _step > stepNum ? AppColors.accentGreen : AppColors.border),
-            ]),
-          );
-        })),
-      ]),
-    ).animate().fadeIn();
-  }
-
-  Widget _buildCTA() {
-    return GestureDetector(
-      onTap: _canRun ? _run : null,
-      child: AnimatedContainer(
-        duration: const Duration(milliseconds: 200),
-        height: 54,
-        decoration: BoxDecoration(
-          gradient: _canRun ? AppColors.primaryGrad : null,
-          color: _canRun ? null : AppColors.border,
-          borderRadius: BorderRadius.circular(14),
-        ),
-        child: Row(mainAxisAlignment: MainAxisAlignment.center, children: [
-          Icon(_isOffline ? Icons.wifi_off_rounded : Icons.bolt_rounded,
-              color: Colors.white, size: 20),
-          const SizedBox(width: 8),
-          Text(
-            _isOffline ? 'No internet connection'
-                : (_mode == 0 || _mode == 3) && _file == null ? 'Select a source first'
-                : (_mode == 1 || _mode == 2) && _urlCtrl.text.trim().isEmpty ? 'Paste a URL first'
-                : 'Generate Study Materials',
-            style: AppText.body.copyWith(color: Colors.white, fontWeight: FontWeight.w700),
+              ],
+            ),
           ),
-        ]),
+        ])
+            : Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Container(
+              width: 52, height: 52,
+              decoration: BoxDecoration(
+                color: AppColors.primaryGlow,
+                borderRadius: BorderRadius.circular(14),
+              ),
+              child: const Center(
+                child: Icon(Icons.camera_alt_rounded,
+                    size: 26, color: AppColors.primary),
+              ),
+            ),
+            const SizedBox(height: 14),
+            Text('Take a photo of your notes',
+                style: TextStyle(
+                    fontSize: 14,
+                    fontWeight: FontWeight.w700,
+                    color: AppColors.textPrimary)),
+            const SizedBox(height: 4),
+            Text('JPEG or PNG · Max 10 MB',
+                style: TextStyle(
+                    fontSize: 12, color: AppColors.textSecond)),
+          ],
+        ),
       ),
     );
   }
 
-  Widget _buildTips() {
-    final tips = [
-      if (_mode == 0) ('📄', 'Text-based PDFs work best — not scanned images'),
-      if (_mode == 1) ('🎬', 'Video must have captions (auto-generated is fine)'),
-      if (_mode == 2) ('🌐', 'Wikipedia articles and blog posts work great'),
-      if (_mode == 3) ('📸', 'Use good lighting and hold the camera steady'),
-      ('⚡', 'Only the first ~3 000 characters are processed'),
-      ('🤖', 'AI generation takes 30–90 seconds on first run'),
-    ];
+  Widget _buildErrorCard() {
+    return Container(
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: AppColors.accentRed.withOpacity(0.07),
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: AppColors.accentRed.withOpacity(0.25)),
+      ),
+      child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        const Icon(Icons.warning_amber_rounded,
+            color: AppColors.accentRed, size: 18),
+        const SizedBox(width: 10),
+        Expanded(
+          child: Text(_error!,
+              style: TextStyle(
+                  fontSize: 12,
+                  height: 1.5,
+                  color: AppColors.accentRed)),
+        ),
+      ]),
+    ).animate().fadeIn(duration: 250.ms).slideY(begin: -0.05);
+  }
+
+  Widget _buildStepProgress() {
     return Container(
       padding: const EdgeInsets.all(16),
-      decoration: cardDecoration(),
-      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        Text('TIPS', style: AppText.label),
-        const SizedBox(height: 12),
-        for (final t in tips)
-          Padding(
-            padding: const EdgeInsets.only(bottom: 8),
-            child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
-              Text(t.$1, style: const TextStyle(fontSize: 15)),
+      decoration: BoxDecoration(
+        color: AppColors.surface,
+        borderRadius: BorderRadius.circular(18),
+        border: Border.all(color: AppColors.border),
+      ),
+      child: Column(
+        children: [
+          if (_statusMsg.isNotEmpty) ...[
+            Row(children: [
+              if (_step < 4)
+                SizedBox(
+                    width: 16, height: 16,
+                    child: CircularProgressIndicator(
+                        strokeWidth: 2,
+                        color: _step == 3
+                            ? AppColors.accentAmber
+                            : AppColors.primary))
+              else
+                Icon(Icons.check_circle_rounded,
+                    color: AppColors.accentGreen, size: 16),
               const SizedBox(width: 10),
-              Expanded(child: Text(t.$2, style: AppText.caption)),
+              Expanded(
+                child: Text(_statusMsg,
+                    style: TextStyle(
+                        fontSize: 12,
+                        color: AppColors.textBody,
+                        fontWeight: FontWeight.w500)),
+              ),
             ]),
+            const SizedBox(height: 16),
+          ],
+          Row(
+            children: List.generate(_steps.length, (i) {
+              final stepNum  = i + 1;
+              final isDone   = _step > stepNum;
+              final isActive = _step == stepNum;
+              final color = isDone
+                  ? AppColors.accentGreen
+                  : isActive
+                  ? AppColors.primary
+                  : AppColors.border;
+              final bg = isDone
+                  ? AppColors.accentGreen.withOpacity(0.10)
+                  : isActive
+                  ? AppColors.primaryGlow
+                  : const Color(0xFFF0EDE8);
+              return Expanded(
+                child: Row(children: [
+                  Expanded(
+                    child: AnimatedContainer(
+                      duration: const Duration(milliseconds: 350),
+                      curve: Curves.easeInOut,
+                      padding: const EdgeInsets.symmetric(vertical: 9),
+                      decoration: BoxDecoration(
+                        color: bg,
+                        borderRadius: BorderRadius.circular(10),
+                        border: Border.all(
+                            color: color.withOpacity(isActive ? 0.4 : 0.25)),
+                      ),
+                      child: Column(children: [
+                        Icon(
+                          isDone ? Icons.check_rounded : _steps[i].icon,
+                          size: 15,
+                          color: isDone
+                              ? AppColors.accentGreen
+                              : isActive
+                              ? AppColors.primary
+                              : AppColors.textSecond.withOpacity(0.4),
+                        ),
+                        const SizedBox(height: 4),
+                        Text(_steps[i].label,
+                            style: TextStyle(
+                                fontSize: 10,
+                                fontWeight: FontWeight.w600,
+                                color: isDone
+                                    ? AppColors.accentGreen
+                                    : isActive
+                                    ? AppColors.primary
+                                    : AppColors.textSecond.withOpacity(0.4))),
+                      ]),
+                    ),
+                  ),
+                  if (i < _steps.length - 1)
+                    AnimatedContainer(
+                        duration: const Duration(milliseconds: 350),
+                        width: 6, height: 2,
+                        color: _step > stepNum
+                            ? AppColors.accentGreen
+                            : AppColors.border.withOpacity(0.5)),
+                ]),
+              );
+            }),
           ),
+        ],
+      ),
+    ).animate().fadeIn(duration: 300.ms).slideY(begin: 0.06);
+  }
+
+  Widget _buildCTA() {
+    final label = _isOffline
+        ? 'No internet connection'
+        : (_mode == 0 || _mode == 3) && _file == null
+        ? 'Select a source first'
+        : (_mode == 1 || _mode == 2) && _urlCtrl.text.trim().isEmpty
+        ? 'Paste a URL first'
+        : _busy
+        ? 'Processing…'
+        : 'Generate Study Materials';
+
+    return GestureDetector(
+      onTap: _canRun ? _run : null,
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 200),
+        width: double.infinity,
+        padding: const EdgeInsets.symmetric(vertical: 18),
+        decoration: BoxDecoration(
+          color: _canRun ? AppColors.ctaBlue : AppColors.surface,
+          borderRadius: BorderRadius.circular(14),
+          border: _canRun
+              ? null
+              : Border.all(color: AppColors.border),
+        ),
+        child: Row(mainAxisAlignment: MainAxisAlignment.center, children: [
+          Icon(
+            _isOffline
+                ? Icons.wifi_off_rounded
+                : _busy
+                ? Icons.hourglass_top_rounded
+                : Icons.bolt_rounded,
+            color: _canRun ? Colors.white : AppColors.textSecond,
+            size: 20,
+          ),
+          const SizedBox(width: 8),
+          Text(label,
+              style: TextStyle(
+                  fontSize: 15,
+                  fontWeight: FontWeight.w700,
+                  color: _canRun ? Colors.white : AppColors.textSecond)),
+        ]),
+      ),
+    ).animate().fadeIn(delay: 200.ms, duration: 350.ms);
+  }
+
+  // ── Tips card — emojis replaced with contextual icon badges ───────────────
+
+  Widget _buildTipsCard() {
+    final tips = [
+      if (_mode == 0)
+        (icon: Icons.picture_as_pdf_outlined,
+        color: AppColors.accentRed,
+        text: 'Text-based PDFs work best — not scanned images'),
+      if (_mode == 1)
+        (icon: Icons.closed_caption_outlined,
+        color: AppColors.accentRed,
+        text: 'Video must have captions (auto-generated is fine)'),
+      if (_mode == 2)
+        (icon: Icons.article_outlined,
+        color: AppColors.primary,
+        text: 'Wikipedia articles and blog posts work great'),
+      if (_mode == 3)
+        (icon: Icons.wb_sunny_outlined,
+        color: AppColors.accentAmber,
+        text: 'Use good lighting and hold the camera steady'),
+      (icon: Icons.compress_rounded,
+      color: AppColors.primary,
+      text: 'Only the first ~3 000 characters are processed'),
+      (icon: Icons.schedule_rounded,
+      color: AppColors.textSecond,
+      text: 'AI generation takes 30–90 seconds on first run'),
+    ];
+
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: AppColors.surface,
+        borderRadius: BorderRadius.circular(18),
+        border: Border.all(color: AppColors.border),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Text('Tips',
+                  style: TextStyle(
+                      fontSize: 15,
+                      fontWeight: FontWeight.w700,
+                      color: AppColors.textPrimary)),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                decoration: BoxDecoration(
+                  color: AppColors.primaryGlow,
+                  borderRadius: BorderRadius.circular(20),
+                ),
+                child: Text('${tips.length}',
+                    style: TextStyle(
+                        fontSize: 11,
+                        fontWeight: FontWeight.w700,
+                        color: AppColors.primary)),
+              ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          ...List.generate(tips.length, (i) {
+            final t      = tips[i];
+            final isLast = i == tips.length - 1;
+            return Container(
+              padding: EdgeInsets.only(
+                  top: i == 0 ? 0 : 10,
+                  bottom: isLast ? 0 : 10),
+              decoration: BoxDecoration(
+                  border: isLast
+                      ? null
+                      : Border(
+                      bottom: BorderSide(
+                          color: AppColors.border.withOpacity(0.5)))),
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Container(
+                    width: 28, height: 28,
+                    decoration: BoxDecoration(
+                      color: t.color.withOpacity(0.10),
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    child: Center(
+                      child: Icon(t.icon, size: 14, color: t.color),
+                    ),
+                  ),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: Padding(
+                      padding: const EdgeInsets.only(top: 5),
+                      child: Text(t.text,
+                          style: TextStyle(
+                              fontSize: 12,
+                              height: 1.5,
+                              color: AppColors.textBody)),
+                    ),
+                  ),
+                ],
+              ),
+            );
+          }),
+        ],
+      ),
+    ).animate().fadeIn(delay: 300.ms, duration: 350.ms);
+  }
+}
+
+// ─── Type pill chip ────────────────────────────────────────────────────────────
+
+class _TypePill extends StatelessWidget {
+  final String   label;
+  final IconData icon;
+  const _TypePill({required this.label, required this.icon});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+      decoration: BoxDecoration(
+        color: AppColors.primaryGlow,
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(color: AppColors.primary.withOpacity(0.2)),
+      ),
+      child: Row(mainAxisSize: MainAxisSize.min, children: [
+        Icon(icon, size: 11, color: AppColors.primary),
+        const SizedBox(width: 4),
+        Text(label,
+            style: TextStyle(
+                fontSize: 10,
+                fontWeight: FontWeight.w700,
+                color: AppColors.primary)),
       ]),
     );
   }

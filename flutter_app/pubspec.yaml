@@ -13,6 +13,9 @@ dependencies:
   # Supabase
   supabase_flutter: ^2.5.3
 
+  # Google Sign-In
+  google_sign_in: ^6.2.1
+
   # File picking
   file_picker: ^8.0.3
 
@@ -31,10 +34,10 @@ dependencies:
   # Env file loading
   flutter_dotenv: ^5.1.0
 
-  # Local storage
+  # Local storage (Remember Me)
   shared_preferences: ^2.2.3
 
-  # Image picking (profile avatar + OCR camera)
+  # Image picking
   image_picker: ^1.1.2
 
   # Confetti burst on first upload
@@ -43,7 +46,7 @@ dependencies:
   # Offline banner / connectivity detection
   connectivity_plus: ^6.0.3
 
-  # ✅ V3 NEW: URL launcher (open YouTube links etc.)
+  # URL launcher
   url_launcher: ^6.3.0
 
 dev_dependencies:

@@ -1,8 +1,4 @@
 // lib/screens/home_screen.dart
-// Identical to your V2 home screen, but uses the shared AppBottomNav widget.
-// Removed: inline _NavTab enum, inline _NavItem widget, inline _buildBottomNav().
-// Added:   import of AppBottomNav + AppNavTab from widgets/app_bottom_nav.dart.
-
 import 'dart:async';
 import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:flutter/material.dart';
@@ -15,7 +11,7 @@ import '../main.dart' show slideRoute;
 import '../services/profile_service.dart';
 import '../models/profile.dart';
 import '../models/study_result.dart';
-import '../widgets/app_bottom_nav.dart'; // ← shared nav
+import '../widgets/app_bottom_nav.dart';
 import 'upload_screen.dart';
 import 'results_screen.dart';
 import 'profile_screen.dart';
@@ -23,6 +19,7 @@ import 'admin/admin_dashboard_screen.dart';
 import 'sr_review_screen.dart';
 import 'analytics_screen.dart';
 import 'shared_sessions_screen.dart';
+import 'notifications_screen.dart';
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -55,11 +52,19 @@ class _HomeScreenState extends State<HomeScreen> {
   String  _greeting = '';
 
   bool _isOffline = false;
+  int _unreadCount = 0;
+
 
   final Map<String, bool> _retrying = {};
 
-  // Uses the shared enum — no local _NavTab needed
   AppNavTab _currentTab = AppNavTab.home;
+
+  // ── Real stats state ───────────────────────────────────────────────────────
+  int    _questionsThisWeek  = 0;
+  int    _flashcardsThisWeek = 0;
+  int    _questionsDelta     = 0;
+  int    _flashcardsDelta    = 0;
+  double _accuracyRate       = 0.0; // 0.0–1.0
 
   // ── Lifecycle ──────────────────────────────────────────────────────────────
 
@@ -136,28 +141,66 @@ class _HomeScreenState extends State<HomeScreen> {
     try {
       final uid = _auth.userId;
       if (uid != null) {
-        final results = await Future.wait([
+        // ── Critical data first — sessions + profile ──────────────────────
+        final coreResults = await Future.wait([
           _api.getUserResults(uid),
           _profileSvc.getProfile(uid),
         ]);
+
         if (mounted) {
-          final sessions = results[0] as List<Map<String, dynamic>>;
+          final sessions = coreResults[0] as List<Map<String, dynamic>>;
           setState(() {
             _sessions    = sessions;
             _parsed      = sessions.map((r) => StudyResult.fromJson(r)).toList();
-            _userProfile = results[1] as UserProfile;
+            _userProfile = coreResults[1] as UserProfile;
             _isAdmin     = _userProfile!.isAdmin;
             _lastSynced  = DateTime.now();
             _applyFilter();
           });
         }
+
+        // ── Stats — fetched separately so failures don't block main data ──
+        // ── Stats — fetched separately so failures don't block main data ──
+        try {
+          final statsResults = await Future.wait([
+            _api.getWeeklyStats(uid),
+            _api.getAnalyticsSummary(uid),
+          ]);
+
+          final weeklyStats = statsResults[0] as Map<String, dynamic>;
+          final summary     = statsResults[1] as Map<String, dynamic>;
+
+          debugPrint('=== WEEKLY STATS: $weeklyStats');
+          debugPrint('=== SUMMARY: $summary');
+
+          if (mounted) {
+            setState(() {
+              _questionsThisWeek  = (weeklyStats['questions_this_week']  as num?)?.toInt() ?? 0;
+              _flashcardsThisWeek = (weeklyStats['flashcards_this_week'] as num?)?.toInt() ?? 0;
+              _questionsDelta     = (weeklyStats['questions_delta']       as num?)?.toInt() ?? 0;
+              _flashcardsDelta    = (weeklyStats['flashcards_delta']      as num?)?.toInt() ?? 0;
+              final avgAcc        = (summary['avg_accuracy'] as num?)?.toDouble() ?? 0.0;
+              _accuracyRate       = avgAcc / 100.0;
+            });
+          }
+
+          // Load unread notification count
+          try {
+            final notifs = await _api.getNotifications(uid);
+            if (mounted) {
+              setState(() => _unreadCount = notifs.where((n) => !n.isRead).length);
+            }
+          } catch (_) {}
+        } catch (e) {
+          debugPrint('Stats fetch failed: $e');
+        }
       }
-    } catch (_) {}
-    finally {
+    } catch (e) {
+      debugPrint('Core data load failed: $e');
+    } finally {
       if (mounted) setState(() => _loading = false);
     }
   }
-
   // ── Delete session ─────────────────────────────────────────────────────────
 
   Future<void> _deleteSession(int filteredIndex) async {
@@ -397,6 +440,17 @@ class _HomeScreenState extends State<HomeScreen> {
     return items;
   }
 
+  // ── Delta label helpers ────────────────────────────────────────────────────
+
+  String _deltaLabel(int delta, String unit) {
+    if (delta == 0) return 'No change this week';
+    final sign = delta > 0 ? '+' : '';
+    return '$sign$delta $unit this week';
+  }
+
+  Color _deltaColor(int delta) =>
+      delta >= 0 ? AppColors.deltaGreen : AppColors.accentRed;
+
   // ── Avatar menu ────────────────────────────────────────────────────────────
 
   void _showAvatarMenu(BuildContext context) async {
@@ -443,16 +497,15 @@ class _HomeScreenState extends State<HomeScreen> {
                 color: AppColors.accentRed)),
       ],
     );
-
-    if (!mounted) return;
+    if (!mounted || result == null) return;
     switch (result) {
       case 'profile':
         await Navigator.of(context).push(slideRoute(const ProfileScreen()));
-        _loadData();
+        if (mounted) _loadData();
       case 'admin':
-        Navigator.of(context).push(slideRoute(const AdminDashboardScreen()));
+        if (mounted) Navigator.of(context).push(slideRoute(const AdminDashboardScreen()));
       case 'signout':
-        _auth.signOut();
+        await _auth.signOut();
     }
   }
 
@@ -535,7 +588,6 @@ class _HomeScreenState extends State<HomeScreen> {
                 ),
               ],
             ),
-            // ── Shared nav widget ──────────────────────────────────────────
             Positioned(
               left: 0, right: 0, bottom: 0,
               child: AppBottomNav(
@@ -620,7 +672,20 @@ class _HomeScreenState extends State<HomeScreen> {
                 ),
               ),
               GestureDetector(
-                onTap: () {},
+                onTap: () async {
+                  HapticFeedback.lightImpact();
+                  await Navigator.of(context)
+                      .push(slideRoute(const NotificationsScreen()));
+                  // Refresh unread dot when returning
+                  final uid = _auth.userId;
+                  if (uid != null && mounted) {
+                    try {
+                      final notifs = await _api.getNotifications(uid);
+                      setState(() => _unreadCount =
+                          notifs.where((n) => !n.isRead).length);
+                    } catch (_) {}
+                  }
+                },
                 child: Container(
                   width: 32, height: 32,
                   decoration: BoxDecoration(
@@ -632,16 +697,18 @@ class _HomeScreenState extends State<HomeScreen> {
                     children: [
                       Center(child: Icon(Icons.notifications_outlined,
                           size: 16, color: AppColors.textSecond)),
-                      Positioned(
-                        top: 4, right: 4,
-                        child: Container(
-                          width: 7, height: 7,
-                          decoration: BoxDecoration(
-                              color: AppColors.accentRed,
-                              shape: BoxShape.circle,
-                              border: Border.all(color: AppColors.surface, width: 1)),
+                      if (_unreadCount > 0)
+                        Positioned(
+                          top: 4, right: 4,
+                          child: Container(
+                            width: 7, height: 7,
+                            decoration: BoxDecoration(
+                                color: AppColors.accentRed,
+                                shape: BoxShape.circle,
+                                border: Border.all(
+                                    color: AppColors.surface, width: 1)),
+                          ),
                         ),
-                      ),
                     ],
                   ),
                 ),
@@ -751,6 +818,7 @@ class _HomeScreenState extends State<HomeScreen> {
   // ── Stats ──────────────────────────────────────────────────────────────────
 
   Widget _buildStats() {
+    // All-time totals computed locally from loaded sessions
     final totalQ = _sessions.fold<int>(
         0, (s, r) => s + ((r['quiz']       as List?)?.length ?? 0));
     final totalC = _sessions.fold<int>(
@@ -785,8 +853,8 @@ class _HomeScreenState extends State<HomeScreen> {
               child: _StatCard(
                 label: 'Questions generated',
                 value: '$totalQ',
-                delta: '+34 this week',
-                deltaColor: AppColors.deltaGreen,
+                delta: _deltaLabel(_questionsDelta, 'new'),
+                deltaColor: _deltaColor(_questionsDelta),
               ),
             ),
             const SizedBox(width: 10),
@@ -794,8 +862,8 @@ class _HomeScreenState extends State<HomeScreen> {
               child: _StatCard(
                 label: 'Flashcards created',
                 value: '$totalC',
-                delta: '+20 this week',
-                deltaColor: AppColors.deltaGreen,
+                delta: _deltaLabel(_flashcardsDelta, 'new'),
+                deltaColor: _deltaColor(_flashcardsDelta),
               ),
             ),
           ]),
@@ -813,9 +881,13 @@ class _HomeScreenState extends State<HomeScreen> {
             Expanded(
               child: _StatCard(
                 label: 'Accuracy rate',
-                value: '84%',
-                showBar: true,
-                barValue: 0.84,
+                value: _accuracyRate > 0
+                    ? '${(_accuracyRate * 100).round()}%'
+                    : '—',
+                showBar:  _accuracyRate > 0,
+                barValue: _accuracyRate,
+                delta:    _accuracyRate == 0 ? 'No quizzes yet' : null,
+                deltaColor: AppColors.textSecond,
               ),
             ),
           ]),

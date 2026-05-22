@@ -1,6 +1,7 @@
 // lib/screens/shared_sessions_screen.dart
 // Browse public study sessions shared by other users.
 // Featured shelf (most cloned) + search + clone into own library.
+// V2 — emojis replaced with icon badges
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -28,12 +29,14 @@ class _SharedSessionsScreenState extends State<SharedSessionsScreen> {
   List<PublicSession> _featured = [];
   List<PublicSession> _browse   = [];
 
-  bool    _loading         = true;
-  bool    _searching       = false;
-  bool    _loadingMore     = false;
+  bool    _loading     = true;
+  bool    _searching   = false;
+  bool    _loadingMore = false;
   String? _error;
-  int     _offset          = 0;
-  final   _cloning         = <String>{};   // result IDs currently being cloned
+  int     _offset      = 0;
+  final   _cloning     = <String>{};
+
+  AppNavTab _currentTab = AppNavTab.community;
 
   @override
   void initState() {
@@ -149,17 +152,16 @@ class _SharedSessionsScreenState extends State<SharedSessionsScreen> {
       backgroundColor: AppColors.bg,
       appBar: AppBar(
         automaticallyImplyLeading: false,
+        backgroundColor: AppColors.bg,
+        surfaceTintColor: Colors.transparent,
+        elevation: 0,
         title: Text('Community Sessions', style: AppText.subheading),
       ),
       body: Stack(
         children: [
-
-          // Main Content
           _loading
               ? const Center(
-            child: CircularProgressIndicator(
-              color: AppColors.primary,
-            ),
+            child: CircularProgressIndicator(color: AppColors.primary),
           )
               : _error != null
               ? _buildError()
@@ -168,19 +170,12 @@ class _SharedSessionsScreenState extends State<SharedSessionsScreen> {
             color: AppColors.primary,
             child: CustomScrollView(
               slivers: [
-
-                SliverToBoxAdapter(
-                  child: _buildSearchBar(),
-                ),
+                SliverToBoxAdapter(child: _buildSearchBar()),
 
                 if (_searchCtrl.text.isEmpty && _featured.isNotEmpty)
-                  SliverToBoxAdapter(
-                    child: _buildFeaturedShelf(),
-                  ),
+                  SliverToBoxAdapter(child: _buildFeaturedShelf()),
 
-                SliverToBoxAdapter(
-                  child: _buildBrowseHeader(),
-                ),
+                SliverToBoxAdapter(child: _buildBrowseHeader()),
 
                 if (_searching)
                   const SliverToBoxAdapter(
@@ -188,48 +183,33 @@ class _SharedSessionsScreenState extends State<SharedSessionsScreen> {
                       child: Padding(
                         padding: EdgeInsets.all(32),
                         child: CircularProgressIndicator(
-                          color: AppColors.primary,
-                          strokeWidth: 2,
-                        ),
+                            color: AppColors.primary, strokeWidth: 2),
                       ),
                     ),
                   )
                 else if (_browse.isEmpty)
-                  SliverToBoxAdapter(
-                    child: _buildEmpty(),
-                  )
+                  SliverToBoxAdapter(child: _buildEmpty())
                 else
                   SliverList(
                     delegate: SliverChildBuilderDelegate(
                           (ctx, i) {
-                        if (i == _browse.length) {
-                          return _buildLoadMore();
-                        }
-
-                        return _buildSessionCard(
-                          _browse[i],
-                          i,
-                        );
+                        if (i == _browse.length) return _buildLoadMore();
+                        return _buildSessionCard(_browse[i], i);
                       },
                       childCount: _browse.length + 1,
                     ),
                   ),
 
-                // IMPORTANT SPACER
-                const SliverToBoxAdapter(
-                  child: SizedBox(height: 110),
-                ),
+                const SliverToBoxAdapter(child: SizedBox(height: 110)),
               ],
             ),
           ),
 
-          // Floating Bottom Nav
-          const Positioned(
-            left: 0,
-            right: 0,
-            bottom: 0,
+          Positioned(
+            left: 0, right: 0, bottom: 0,
             child: AppBottomNav(
-              currentTab: AppNavTab.community,
+              currentTab: _currentTab,
+              onTabChanged: (tab) => setState(() => _currentTab = tab),
             ),
           ),
         ],
@@ -237,9 +217,21 @@ class _SharedSessionsScreenState extends State<SharedSessionsScreen> {
     );
   }
 
+  // ── Error state ───────────────────────────────────────────────────────────
+
   Widget _buildError() => Center(
     child: Column(mainAxisSize: MainAxisSize.min, children: [
-      const Icon(Icons.people_outline_rounded, size: 52, color: AppColors.textMuted),
+      Container(
+        width: 64, height: 64,
+        decoration: BoxDecoration(
+          color: AppColors.accentRed.withOpacity(0.08),
+          borderRadius: BorderRadius.circular(20),
+        ),
+        child: const Center(
+          child: Icon(Icons.people_outline_rounded,
+              size: 30, color: AppColors.accentRed),
+        ),
+      ),
       const SizedBox(height: 16),
       Text('Could not load sessions', style: AppText.subheading),
       const SizedBox(height: 8),
@@ -248,6 +240,8 @@ class _SharedSessionsScreenState extends State<SharedSessionsScreen> {
       ElevatedButton(onPressed: _load, child: const Text('Retry')),
     ]),
   );
+
+  // ── Search bar ────────────────────────────────────────────────────────────
 
   Widget _buildSearchBar() => Padding(
     padding: const EdgeInsets.fromLTRB(20, 16, 20, 0),
@@ -260,9 +254,9 @@ class _SharedSessionsScreenState extends State<SharedSessionsScreen> {
         prefixIcon: Icon(Icons.search_rounded, size: 18, color: AppColors.textSecond),
         suffixIcon: _searchCtrl.text.isNotEmpty
             ? GestureDetector(
-                onTap: () { _searchCtrl.clear(); _search(''); },
-                child: Icon(Icons.close_rounded, size: 16, color: AppColors.textSecond),
-              )
+          onTap: () { _searchCtrl.clear(); _search(''); },
+          child: Icon(Icons.close_rounded, size: 16, color: AppColors.textSecond),
+        )
             : null,
         filled: true,
         fillColor: AppColors.surface,
@@ -280,13 +274,29 @@ class _SharedSessionsScreenState extends State<SharedSessionsScreen> {
     ),
   ).animate().fadeIn();
 
+  // ── Featured shelf — ⭐ emoji replaced with icon badge ───────────────────
+
   Widget _buildFeaturedShelf() => Padding(
     padding: const EdgeInsets.fromLTRB(20, 24, 0, 0),
     child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
       Padding(
         padding: const EdgeInsets.only(right: 20),
         child: Row(children: [
-          Text('⭐  Featured', style: AppText.subheading.copyWith(fontSize: 15)),
+          // ⭐ → icon badge
+          Container(
+            width: 28, height: 28,
+            decoration: BoxDecoration(
+              color: AppColors.accentAmber.withOpacity(0.12),
+              borderRadius: BorderRadius.circular(8),
+            ),
+            child: const Center(
+              child: Icon(Icons.star_rounded,
+                  size: 16, color: AppColors.accentAmber),
+            ),
+          ),
+          const SizedBox(width: 8),
+          Text('Featured',
+              style: AppText.subheading.copyWith(fontSize: 15)),
           const SizedBox(width: 6),
           Text('most cloned', style: AppText.caption),
         ]),
@@ -307,7 +317,7 @@ class _SharedSessionsScreenState extends State<SharedSessionsScreen> {
 
   Widget _buildFeaturedCard(PublicSession s, int i) {
     final colors = [AppColors.primary, AppColors.accentGreen,
-        AppColors.accentAmber, AppColors.accentBlue];
+      AppColors.accentAmber, AppColors.accentBlue];
     final color = colors[i % colors.length];
 
     return GestureDetector(
@@ -326,7 +336,8 @@ class _SharedSessionsScreenState extends State<SharedSessionsScreen> {
             Icon(Icons.library_books_rounded, size: 16, color: color),
             const SizedBox(width: 6),
             Text('${s.cloneCount} clones',
-                style: TextStyle(fontSize: 11, color: color, fontWeight: FontWeight.w600)),
+                style: TextStyle(fontSize: 11, color: color,
+                    fontWeight: FontWeight.w600)),
           ]),
           const SizedBox(height: 8),
           Text(s.fileName,
@@ -346,15 +357,23 @@ class _SharedSessionsScreenState extends State<SharedSessionsScreen> {
               color: color,
               borderRadius: BorderRadius.circular(8),
             ),
-            child: const Text('Clone  →',
-                style: TextStyle(color: Colors.white,
-                    fontSize: 11, fontWeight: FontWeight.w700)),
+            child: Row(mainAxisSize: MainAxisSize.min, children: [
+              const Icon(Icons.copy_all_rounded,
+                  size: 12, color: Colors.white),
+              const SizedBox(width: 5),
+              const Text('Clone',
+                  style: TextStyle(color: Colors.white,
+                      fontSize: 11, fontWeight: FontWeight.w700)),
+            ]),
           ),
         ]),
       ),
-    ).animate().fadeIn(delay: Duration(milliseconds: i * 60))
+    ).animate()
+        .fadeIn(delay: Duration(milliseconds: i * 60))
         .slideX(begin: 0.1);
   }
+
+  // ── Browse header ─────────────────────────────────────────────────────────
 
   Widget _buildBrowseHeader() => Padding(
     padding: const EdgeInsets.fromLTRB(20, 24, 20, 8),
@@ -376,18 +395,32 @@ class _SharedSessionsScreenState extends State<SharedSessionsScreen> {
     ]),
   );
 
+  // ── Empty state ───────────────────────────────────────────────────────────
+
   Widget _buildEmpty() => Padding(
     padding: const EdgeInsets.all(40),
     child: Center(
       child: Column(mainAxisSize: MainAxisSize.min, children: [
-        const Icon(Icons.search_off_rounded, size: 40, color: AppColors.textMuted),
-        const SizedBox(height: 12),
+        Container(
+          width: 52, height: 52,
+          decoration: BoxDecoration(
+            color: AppColors.primaryGlow,
+            borderRadius: BorderRadius.circular(16),
+          ),
+          child: const Center(
+            child: Icon(Icons.search_off_rounded,
+                size: 26, color: AppColors.primary),
+          ),
+        ),
+        const SizedBox(height: 14),
         Text('No sessions found', style: AppText.bodySmall),
         const SizedBox(height: 6),
         Text('Try a different search term.', style: AppText.caption),
       ]),
     ),
   );
+
+  // ── Session card ──────────────────────────────────────────────────────────
 
   Widget _buildSessionCard(PublicSession s, int i) {
     final isCloning = _cloning.contains(s.id);
@@ -416,18 +449,23 @@ class _SharedSessionsScreenState extends State<SharedSessionsScreen> {
             ),
             const SizedBox(width: 12),
             Expanded(
-              child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start, children: [
                 Text(s.fileName,
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
-                    style: AppText.bodySmall.copyWith(fontWeight: FontWeight.w700)),
+                    style: AppText.bodySmall
+                        .copyWith(fontWeight: FontWeight.w700)),
                 const SizedBox(height: 3),
                 Row(children: [
-                  _MiniPill(label: '${s.quizCount} Q', color: AppColors.accentGreen),
+                  _MiniPill(label: '${s.quizCount} Q',
+                      color: AppColors.accentGreen),
                   const SizedBox(width: 6),
-                  _MiniPill(label: '${s.cardCount} cards', color: AppColors.accentAmber),
+                  _MiniPill(label: '${s.cardCount} cards',
+                      color: AppColors.accentAmber),
                   const SizedBox(width: 6),
-                  _MiniPill(label: '${s.cloneCount} clones', color: AppColors.primary),
+                  _MiniPill(label: '${s.cloneCount} clones',
+                      color: AppColors.primary),
                 ]),
               ]),
             ),
@@ -454,38 +492,50 @@ class _SharedSessionsScreenState extends State<SharedSessionsScreen> {
               ),
               child: Row(mainAxisSize: MainAxisSize.min, children: [
                 if (isCloning)
-                  const SizedBox(width: 14, height: 14,
-                      child: CircularProgressIndicator(
-                          strokeWidth: 2, color: AppColors.primary))
+                  const SizedBox(
+                    width: 14, height: 14,
+                    child: CircularProgressIndicator(
+                        strokeWidth: 2, color: AppColors.primary),
+                  )
                 else
-                  const Icon(Icons.copy_all_rounded, size: 14, color: Colors.white),
+                  const Icon(Icons.copy_all_rounded,
+                      size: 14, color: Colors.white),
                 const SizedBox(width: 6),
                 Text(isCloning ? 'Cloning…' : 'Clone to my library',
                     style: TextStyle(
                       fontSize: 12, fontWeight: FontWeight.w700,
-                      color: isCloning ? AppColors.textSecond : Colors.white,
+                      color: isCloning
+                          ? AppColors.textSecond
+                          : Colors.white,
                     )),
               ]),
             ),
           ),
         ]),
       ),
-    ).animate().fadeIn(delay: Duration(milliseconds: 60 + i * 40))
+    ).animate()
+        .fadeIn(delay: Duration(milliseconds: 60 + i * 40))
         .slideY(begin: 0.06);
   }
+
+  // ── Load more ─────────────────────────────────────────────────────────────
 
   Widget _buildLoadMore() => Padding(
     padding: const EdgeInsets.all(20),
     child: Center(
       child: _loadingMore
-          ? const CircularProgressIndicator(color: AppColors.primary, strokeWidth: 2)
+          ? const CircularProgressIndicator(
+          color: AppColors.primary, strokeWidth: 2)
           : TextButton(
-              onPressed: _loadMore,
-              child: Text('Load more', style: TextStyle(color: AppColors.primary)),
-            ),
+        onPressed: _loadMore,
+        child: Text('Load more',
+            style: TextStyle(color: AppColors.primary)),
+      ),
     ),
   );
 }
+
+// ── Mini pill chip ────────────────────────────────────────────────────────────
 
 class _MiniPill extends StatelessWidget {
   final String label;
@@ -501,6 +551,7 @@ class _MiniPill extends StatelessWidget {
       border: Border.all(color: color.withOpacity(0.20)),
     ),
     child: Text(label,
-        style: TextStyle(fontSize: 10, fontWeight: FontWeight.w600, color: color)),
+        style: TextStyle(fontSize: 10, fontWeight: FontWeight.w600,
+            color: color)),
   );
 }
