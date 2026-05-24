@@ -22,7 +22,6 @@ class ProfileScreen extends StatefulWidget {
 
 class _ProfileScreenState extends State<ProfileScreen>
     with SingleTickerProviderStateMixin {
-  final _auth    = AuthService();
   final _profile = ProfileService();
   late TabController _tabs;
 
@@ -57,8 +56,8 @@ class _ProfileScreenState extends State<ProfileScreen>
   }
 
   Future<void> _load() async {
-    final uid = _auth.userId;
-    if (uid == null) return;
+    final uid = AuthService.userId;
+    if (uid.isEmpty) return;
 
     try {
       final p = await _profile.getProfile(uid);
@@ -87,8 +86,8 @@ class _ProfileScreenState extends State<ProfileScreen>
 
   Future<void> _saveProfile() async {
     if (!_formKey.currentState!.validate()) return;
-    final uid = _auth.userId;
-    if (uid == null) return;
+    final uid = AuthService.userId;
+    if (uid.isEmpty) return;
 
     setState(() => _saving = true);
     try {
@@ -199,7 +198,7 @@ class _ProfileScreenState extends State<ProfileScreen>
                         color: AppColors.textPrimary,
                         letterSpacing: -0.5)),
                 const SizedBox(height: 2),
-                Text(_auth.userEmail ?? '',
+                Text(AuthService.userEmail,
                     style: TextStyle(
                         fontSize: 12,
                         color: AppColors.textSecond)),

@@ -1,43 +1,42 @@
 // lib/main.dart
-// App entry point — initialises Supabase, then routes to Login or Home
-// based on current auth state. No Firebase needed.
+// App entry point — JWT auth state from SharedPreferences.
+// Supabase has been removed. Auth is now handled by Django + JWT.
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_dotenv/flutter_dotenv.dart';
-import 'package:supabase_flutter/supabase_flutter.dart';
 import 'core/constants.dart';
 import 'screens/login_screen.dart';
 import 'screens/home_screen.dart';
+import 'services/auth_service.dart';
 import 'widgets/sf_logo.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
-  // Lock to portrait mode for a consistent mobile experience
+  // Lock to portrait mode
   await SystemChrome.setPreferredOrientations([DeviceOrientation.portraitUp]);
 
-  // Make status bar transparent so the gradient bleeds through
+  // Transparent status bar
   SystemChrome.setSystemUIOverlayStyle(const SystemUiOverlayStyle(
     statusBarColor:          Colors.transparent,
     statusBarBrightness:     Brightness.dark,
     statusBarIconBrightness: Brightness.light,
   ));
 
-  // Load .env file
+  // Load .env
   await dotenv.load(fileName: '.env');
 
-  // Initialise Supabase (free tier, no credit card required)
-  await Supabase.initialize(
-    url:     dotenv.env['SUPABASE_URL']!,
-    anonKey: dotenv.env['SUPABASE_ANON_KEY']!,
-  );
+  // Load cached userId + email into AuthService sync getters.
+  await AuthService.init();
 
   runApp(const StudyforgeApp());
 }
 
-// Convenience global — use anywhere: supabase.auth.currentUser etc.
-final supabase = Supabase.instance.client;
+// ── App root ──────────────────────────────────────────────────────────────────
+// ── App root ──────────────────────────────────────────────────────────────────
+
+final navigatorKey = GlobalKey<NavigatorState>();  // ← move here, top-level
 
 class StudyforgeApp extends StatelessWidget {
   const StudyforgeApp({super.key});
@@ -45,37 +44,69 @@ class StudyforgeApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
+      navigatorKey:               navigatorKey,   // ← add this
       title:                      'Studyforge',
       debugShowCheckedModeBanner: false,
       theme:                      buildAppTheme(),
-
-      // Auth gate: react to Supabase session changes in real time.
-      // ALL navigation after login/logout is handled here — never manually
-      // push HomeScreen or LoginScreen from within those screens.
-      home: StreamBuilder<AuthState>(
-        stream: supabase.auth.onAuthStateChange,
-        builder: (context, snapshot) {
-          // Still waiting for Supabase to restore the persisted session
-          if (snapshot.connectionState == ConnectionState.waiting) {
-            return const _SplashScreen();
-          }
-
-          // User is signed in → Home dashboard
-          if (supabase.auth.currentSession != null) {
-            return const HomeScreen();
-          }
-
-          // Not signed in → Login
-          return const LoginScreen();
-        },
-      ),
+      home:                       const AuthGate(),
     );
   }
 }
 
-// ── Splash screen shown during Supabase init ──────────────────────────────────
-class _SplashScreen extends StatelessWidget {
-  const _SplashScreen();
+// ── Auth gate — rebuilds whenever login / logout changes ──────────────────────
+//
+// LoginScreen calls Navigator.pushReplacement → AuthGate (after sign-in).
+// HomeScreen calls AuthService.signOut() → Navigator.pushReplacement → AuthGate.
+// Both paths trigger a fresh FutureBuilder check.
+
+class AuthGate extends StatefulWidget {
+  const AuthGate({super.key});
+
+  @override
+  State<AuthGate> createState() => _AuthGateState();
+}
+
+class _AuthGateState extends State<AuthGate> {
+  late Future<bool> _loginFuture;
+
+  @override
+  void initState() {
+    super.initState();
+    _loginFuture = AuthService.isLoggedIn();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return FutureBuilder<bool>(
+      future: _loginFuture,
+      builder: (context, snapshot) {
+        // Show splash while checking
+        if (!snapshot.hasData) return const SplashScreen();
+
+        if (snapshot.data == true) {
+          return HomeScreen(onSignOut: _onSignOut);
+        } else {
+          return LoginScreen(onSignIn: _onSignIn);
+        }
+      },
+    );
+  }
+
+  void _onSignIn() {
+    setState(() {
+      _loginFuture = AuthService.isLoggedIn();
+    });
+  }
+  void _onSignOut() {
+    setState(() {
+      _loginFuture = Future.value(false);
+    });
+  }
+}
+
+// ── Splash screen ─────────────────────────────────────────────────────────────
+class SplashScreen extends StatelessWidget {
+  const SplashScreen({super.key});
 
   @override
   Widget build(BuildContext context) {
@@ -109,9 +140,8 @@ class _SplashScreen extends StatelessWidget {
   }
 }
 
-// ── Shared page transition helpers ────────────────────────────────────────────
+// ── Page transition helpers ───────────────────────────────────────────────────
 
-/// Smooth fade transition (used for auth → home)
 Route fadeRoute(Widget page) => PageRouteBuilder(
   pageBuilder:        (_, __, ___) => page,
   transitionsBuilder: (_, anim, __, child) =>
@@ -119,7 +149,6 @@ Route fadeRoute(Widget page) => PageRouteBuilder(
   transitionDuration: const Duration(milliseconds: 380),
 );
 
-/// Slide-from-right transition (used for detail screens)
 Route slideRoute(Widget page) => PageRouteBuilder(
   pageBuilder:        (_, __, ___) => page,
   transitionsBuilder: (_, anim, __, child) => SlideTransition(

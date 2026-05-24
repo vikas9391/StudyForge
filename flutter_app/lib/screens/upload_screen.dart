@@ -11,7 +11,6 @@ import 'package:flutter/services.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter_animate/flutter_animate.dart';
 import 'package:image_picker/image_picker.dart';
-import 'package:supabase_flutter/supabase_flutter.dart';
 import '../core/constants.dart';
 import '../services/api_service.dart';
 import '../services/auth_service.dart';
@@ -29,7 +28,6 @@ class UploadScreen extends StatefulWidget {
 class _UploadScreenState extends State<UploadScreen>
     with TickerProviderStateMixin {
   final _api  = ApiService();
-  final _auth = AuthService();
 
   int _mode = 0;
 
@@ -127,14 +125,8 @@ class _UploadScreenState extends State<UploadScreen>
 
   Future<void> _run() async {
     HapticFeedback.lightImpact();
-    String? uid = _auth.userId;
-    if (uid == null) {
-      try {
-        await Supabase.instance.client.auth.refreshSession();
-        uid = _auth.userId;
-      } catch (_) {}
-    }
-    if (uid == null) {
+    final uid = AuthService.userId;
+    if (uid.isEmpty) {
       setState(() => _error = 'You must be signed in.');
       return;
     }

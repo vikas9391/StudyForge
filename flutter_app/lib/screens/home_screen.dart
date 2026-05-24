@@ -7,7 +7,6 @@ import 'package:flutter_animate/flutter_animate.dart';
 import '../core/constants.dart';
 import '../services/auth_service.dart';
 import '../services/api_service.dart';
-import '../main.dart' show slideRoute;
 import '../services/profile_service.dart';
 import '../models/profile.dart';
 import '../models/study_result.dart';
@@ -20,16 +19,17 @@ import 'sr_review_screen.dart';
 import 'analytics_screen.dart';
 import 'shared_sessions_screen.dart';
 import 'notifications_screen.dart';
+import '../main.dart' show slideRoute, navigatorKey, AuthGate;
 
 class HomeScreen extends StatefulWidget {
-  const HomeScreen({super.key});
+  final VoidCallback? onSignOut;
+  const HomeScreen({super.key, this.onSignOut});
 
   @override
   State<HomeScreen> createState() => _HomeScreenState();
 }
 
 class _HomeScreenState extends State<HomeScreen> {
-  final _auth       = AuthService();
   final _api        = ApiService();
   final _profileSvc = ProfileService();
   final _searchCtrl = TextEditingController();
@@ -139,28 +139,29 @@ class _HomeScreenState extends State<HomeScreen> {
   Future<void> _loadData() async {
     setState(() => _loading = true);
     try {
-      final uid = _auth.userId;
-      if (uid != null) {
-        // ── Critical data first — sessions + profile ──────────────────────
-        final coreResults = await Future.wait([
-          _api.getUserResults(uid),
-          _profileSvc.getProfile(uid),
-        ]);
+      final uid = AuthService.userId;
+      if (uid.isNotEmpty) {
+        // ── Sessions (required) ───────────────────────────────────────────
+        final resultsData = await _api.getUserResults(uid);
+
+        // ── Profile (non-fatal) ───────────────────────────────────────────
+        UserProfile? profile;
+        try {
+          profile = await _profileSvc.getProfile(uid);
+        } catch (_) {}
 
         if (mounted) {
-          final sessions = coreResults[0] as List<Map<String, dynamic>>;
           setState(() {
-            _sessions    = sessions;
-            _parsed      = sessions.map((r) => StudyResult.fromJson(r)).toList();
-            _userProfile = coreResults[1] as UserProfile;
-            _isAdmin     = _userProfile!.isAdmin;
+            _sessions    = resultsData;
+            _parsed      = resultsData.map((r) => StudyResult.fromJson(r)).toList();
+            _userProfile = profile;
+            _isAdmin     = profile?.isAdmin ?? false;
             _lastSynced  = DateTime.now();
             _applyFilter();
           });
         }
 
-        // ── Stats — fetched separately so failures don't block main data ──
-        // ── Stats — fetched separately so failures don't block main data ──
+        // ── Stats (non-fatal) ─────────────────────────────────────────────
         try {
           final statsResults = await Future.wait([
             _api.getWeeklyStats(uid),
@@ -169,9 +170,6 @@ class _HomeScreenState extends State<HomeScreen> {
 
           final weeklyStats = statsResults[0] as Map<String, dynamic>;
           final summary     = statsResults[1] as Map<String, dynamic>;
-
-          debugPrint('=== WEEKLY STATS: $weeklyStats');
-          debugPrint('=== SUMMARY: $summary');
 
           if (mounted) {
             setState(() {
@@ -183,17 +181,17 @@ class _HomeScreenState extends State<HomeScreen> {
               _accuracyRate       = avgAcc / 100.0;
             });
           }
-
-          // Load unread notification count
-          try {
-            final notifs = await _api.getNotifications(uid);
-            if (mounted) {
-              setState(() => _unreadCount = notifs.where((n) => !n.isRead).length);
-            }
-          } catch (_) {}
         } catch (e) {
           debugPrint('Stats fetch failed: $e');
         }
+
+        // ── Notifications (non-fatal) ─────────────────────────────────────
+        try {
+          final notifs = await _api.getNotifications(uid);
+          if (mounted) {
+            setState(() => _unreadCount = notifs.where((n) => !n.isRead).length);
+          }
+        } catch (_) {}
       }
     } catch (e) {
       debugPrint('Core data load failed: $e');
@@ -201,6 +199,7 @@ class _HomeScreenState extends State<HomeScreen> {
       if (mounted) setState(() => _loading = false);
     }
   }
+
   // ── Delete session ─────────────────────────────────────────────────────────
 
   Future<void> _deleteSession(int filteredIndex) async {
@@ -329,7 +328,7 @@ class _HomeScreenState extends State<HomeScreen> {
     final raw = _sessions[masterIndex];
     final id  = raw['result_id'] as String? ?? raw['id'] as String? ?? '';
     final url = raw['file_url'] as String? ?? '';
-    final uid = _auth.userId ?? '';
+    final uid = AuthService.userId;
     if (id.isEmpty || uid.isEmpty) return;
 
     setState(() => _retrying[id] = true);
@@ -388,14 +387,14 @@ class _HomeScreenState extends State<HomeScreen> {
   String get _displayName {
     final name = _userProfile?.fullName.trim() ?? '';
     if (name.isNotEmpty) return name;
-    final email = _auth.userEmail ?? '';
+    final email = AuthService.userEmail;
     return email.contains('@') ? email.split('@').first : email;
   }
 
-  String get _displayEmail    => _auth.userEmail ?? '';
+  String get _displayEmail => AuthService.userEmail;
   String get _displayInitials =>
       _userProfile?.initials ??
-          (_auth.userEmail?.isNotEmpty == true ? _auth.userEmail![0].toUpperCase() : '?');
+          (AuthService.userEmail.isNotEmpty ? AuthService.userEmail[0].toUpperCase() : '?');
 
   String get _lastSyncedLabel {
     if (_lastSynced == null) return '';
@@ -454,14 +453,18 @@ class _HomeScreenState extends State<HomeScreen> {
   // ── Avatar menu ────────────────────────────────────────────────────────────
 
   void _showAvatarMenu(BuildContext context) async {
-    final RenderBox avatar  = context.findRenderObject() as RenderBox;
+    final RenderBox avatar = context.findRenderObject() as RenderBox;
     final RenderBox overlay =
-    Navigator.of(context).overlay!.context.findRenderObject() as RenderBox;
+    Navigator
+        .of(context)
+        .overlay!
+        .context
+        .findRenderObject() as RenderBox;
     final Offset pos = avatar.localToGlobal(
         Offset(0, avatar.size.height + 8), ancestor: overlay);
 
     final result = await showMenu<String>(
-      context:  context,
+      context: context,
       position: RelativeRect.fromLTRB(
           pos.dx, pos.dy, pos.dx + avatar.size.width, pos.dy + 200),
       elevation: 4,
@@ -478,7 +481,8 @@ class _HomeScreenState extends State<HomeScreen> {
         PopupMenuItem<String>(
             value: 'profile',
             padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
-            child: _MenuItem(icon: Icons.person_outline_rounded, label: 'Profile')),
+            child: _MenuItem(
+                icon: Icons.person_outline_rounded, label: 'Profile')),
         if (_isAdmin)
           PopupMenuItem<String>(
               value: 'admin',
@@ -503,9 +507,13 @@ class _HomeScreenState extends State<HomeScreen> {
         await Navigator.of(context).push(slideRoute(const ProfileScreen()));
         if (mounted) _loadData();
       case 'admin':
-        if (mounted) Navigator.of(context).push(slideRoute(const AdminDashboardScreen()));
+        if (mounted) Navigator.of(context).push(
+            slideRoute(const AdminDashboardScreen()));
       case 'signout':
-        await _auth.signOut();
+        await AuthService.clearTokens();
+        if (!mounted) return;
+        widget.onSignOut?.call();
+        AuthService.signOut();
     }
   }
 
@@ -677,8 +685,8 @@ class _HomeScreenState extends State<HomeScreen> {
                   await Navigator.of(context)
                       .push(slideRoute(const NotificationsScreen()));
                   // Refresh unread dot when returning
-                  final uid = _auth.userId;
-                  if (uid != null && mounted) {
+                  final uid = AuthService.userId;
+                  if (uid.isNotEmpty && mounted) {
                     try {
                       final notifs = await _api.getNotifications(uid);
                       setState(() => _unreadCount =

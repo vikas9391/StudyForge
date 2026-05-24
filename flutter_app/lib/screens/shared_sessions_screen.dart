@@ -23,7 +23,6 @@ class SharedSessionsScreen extends StatefulWidget {
 
 class _SharedSessionsScreenState extends State<SharedSessionsScreen> {
   final _api        = ApiService();
-  final _auth       = AuthService();
   final _searchCtrl = TextEditingController();
 
   List<PublicSession> _featured = [];
@@ -109,8 +108,8 @@ class _SharedSessionsScreenState extends State<SharedSessionsScreen> {
   }
 
   Future<void> _clone(PublicSession session) async {
-    final uid = _auth.userId;
-    if (uid == null) return;
+    final uid = AuthService.userId;
+    if (uid.isEmpty) return;
     HapticFeedback.mediumImpact();
     setState(() => _cloning.add(session.id));
     try {

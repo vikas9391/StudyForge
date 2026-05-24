@@ -22,7 +22,6 @@ class AnalyticsScreen extends StatefulWidget {
 
 class _AnalyticsScreenState extends State<AnalyticsScreen> {
   final _api  = ApiService();
-  final _auth = AuthService();
 
   List<WeakTopic>      _weak     = [];
   List<AccuracyPoint>  _accuracy = [];
@@ -40,8 +39,8 @@ class _AnalyticsScreenState extends State<AnalyticsScreen> {
   Future<void> _load() async {
     setState(() { _loading = true; _error = null; });
     try {
-      final uid = _auth.userId;
-      if (uid == null) throw 'Not signed in.';
+      final uid = AuthService.userId;
+      if (uid.isEmpty) throw 'Not signed in.';
       final results = await Future.wait([
         _api.getWeakTopics(uid),
         _api.getAccuracyOverTime(uid),

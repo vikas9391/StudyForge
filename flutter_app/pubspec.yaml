@@ -10,17 +10,14 @@ dependencies:
   flutter:
     sdk: flutter
 
-  # Supabase
-  supabase_flutter: ^2.5.3
+  # HTTP client (Dio for API calls)
+  dio: ^5.4.3+1
 
-  # Google Sign-In
-  google_sign_in: ^6.2.1
+  # Plain HTTP (used by auth_service.dart for signup/signin)
+  http: ^1.2.1
 
   # File picking
   file_picker: ^8.0.3
-
-  # HTTP client
-  dio: ^5.4.3+1
 
   # Beautiful fonts
   google_fonts: ^6.2.1
@@ -34,10 +31,10 @@ dependencies:
   # Env file loading
   flutter_dotenv: ^5.1.0
 
-  # Local storage (Remember Me)
+  # Local storage — stores JWT token + user_id after login
   shared_preferences: ^2.2.3
 
-  # Image picking
+  # Image picking (avatar upload)
   image_picker: ^1.1.2
 
   # Confetti burst on first upload

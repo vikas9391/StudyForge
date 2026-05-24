@@ -7,7 +7,8 @@ import '../core/constants.dart';
 import '../services/auth_service.dart';
 
 class LoginScreen extends StatefulWidget {
-  const LoginScreen({super.key});
+  final VoidCallback? onSignIn;
+  const LoginScreen({super.key, this.onSignIn});
 
   @override
   State<LoginScreen> createState() => _LoginScreenState();
@@ -18,7 +19,6 @@ class _LoginScreenState extends State<LoginScreen>
   final _formKey      = GlobalKey<FormState>();
   final _emailCtrl    = TextEditingController();
   final _passwordCtrl = TextEditingController();
-  final _auth         = AuthService();
 
   // Animation controller for shake-on-error
   late final AnimationController _shakeCtrl;
@@ -90,18 +90,22 @@ class _LoginScreenState extends State<LoginScreen>
 
     try {
       await _saveRememberMe();
-      if (_isLogin) {
-        await _auth.signIn(
-          email:    _emailCtrl.text.trim(),
-          password: _passwordCtrl.text.trim(),
-        );
+      final result = _isLogin
+          ? await AuthService.signIn(
+          email: _emailCtrl.text.trim(),
+          password: _passwordCtrl.text.trim())
+          : await AuthService.signUp(
+          email: _emailCtrl.text.trim(),
+          password: _passwordCtrl.text.trim());
+
+      if (result['success'] == true) {
+        if (mounted) widget.onSignIn?.call();
       } else {
-        await _auth.signUp(
-          email:    _emailCtrl.text.trim(),
-          password: _passwordCtrl.text.trim(),
-        );
+        if (mounted) {
+          setState(() => _error = result['error'] ?? 'Something went wrong');
+          _shakeCtrl.forward(from: 0);
+        }
       }
-      // Navigation handled by StreamBuilder in main.dart
     } catch (e) {
       if (mounted) {
         setState(() => _error = e.toString());
@@ -115,15 +119,18 @@ class _LoginScreenState extends State<LoginScreen>
   Future<void> _signInWithGoogle() async {
     setState(() { _googleBusy = true; _error = null; });
     try {
-      await _auth.signInWithGoogle();
-      // Navigation handled by StreamBuilder in main.dart
+      final result = await AuthService.signInWithGoogle();
+      if (result['success'] == true) {
+        if (mounted) widget.onSignIn?.call();  // ← add this
+      } else {
+        if (mounted) setState(() => _error = result['error']);
+      }
     } catch (e) {
       if (mounted) setState(() => _error = e.toString());
     } finally {
       if (mounted) setState(() => _googleBusy = false);
     }
   }
-
   Future<void> _showForgotPassword() async {
     final emailCtrl = TextEditingController(text: _emailCtrl.text.trim());
     String? dialogError;
@@ -249,7 +256,7 @@ class _LoginScreenState extends State<LoginScreen>
                     dialogError = null;
                   });
                   try {
-                    await _auth.resetPassword(email: email);
+                    await AuthService.resetPassword(email: email);
                     setD(() { sending = false; sent = true; });
                   } catch (e) {
                     setD(() {

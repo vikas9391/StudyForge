@@ -14,7 +14,6 @@ class NotificationsScreen extends StatefulWidget {
 }
 
 class _NotificationsScreenState extends State<NotificationsScreen> {
-  final _auth = AuthService();
   final _api  = ApiService();
 
   List<NotificationItem> _all      = [];
@@ -32,8 +31,8 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
   Future<void> _loadNotifications() async {
     setState(() => _loading = true);
     try {
-      final uid = _auth.userId;
-      if (uid != null) {
+      final uid = AuthService.userId;
+      if (uid.isNotEmpty) {
         final items = await _api.getNotifications(uid);
         if (mounted) setState(() => _all = items);
       }
@@ -79,8 +78,8 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
   Future<void> _markAllRead() async {
     HapticFeedback.lightImpact();
     setState(() => _all = _all.map((n) => n.copyWith(isRead: true)).toList());
-    final uid = _auth.userId;
-    if (uid != null) {
+    final uid = AuthService.userId;
+    if (uid.isNotEmpty) {
       try { await _api.markAllNotificationsRead(uid); } catch (_) {}
     }
   }

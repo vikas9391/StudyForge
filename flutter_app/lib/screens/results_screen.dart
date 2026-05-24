@@ -26,7 +26,6 @@ class ResultsScreen extends StatefulWidget {
 class _ResultsScreenState extends State<ResultsScreen>
     with SingleTickerProviderStateMixin {
   final _api  = ApiService();
-  final _auth = AuthService();
   late TabController _tabs;
 
   StudyResult? _result;
@@ -104,8 +103,8 @@ class _ResultsScreenState extends State<ResultsScreen>
   }
 
   Future<void> _initSrDeck() async {
-    final uid = _auth.userId;
-    if (uid == null || _result == null) return;
+    final uid = AuthService.userId;
+    if (uid.isEmpty || _result == null) return;
     HapticFeedback.mediumImpact();
     setState(() => _initingSr = true);
     try {
@@ -248,7 +247,7 @@ class _ResultsScreenState extends State<ResultsScreen>
             questions:   _result!.quiz,
             resultId:    widget.resultId,
             sessionName: _result!.displayName(0),
-            userId:      _auth.userId ?? '',
+            userId: AuthService.userId,
             api:         _api,
           ),
           _FlashcardsTab(

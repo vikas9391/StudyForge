@@ -28,7 +28,6 @@ class SrReviewScreen extends StatefulWidget {
 class _SrReviewScreenState extends State<SrReviewScreen>
     with SingleTickerProviderStateMixin {
   final _api  = ApiService();
-  final _auth = AuthService();
 
   List<SrSession> _sessions   = [];
   List<SrCard>    _queue      = [];
@@ -72,8 +71,8 @@ class _SrReviewScreenState extends State<SrReviewScreen>
   Future<void> _loadDueCards() async {
     setState(() { _loading = true; _error = null; });
     try {
-      final uid = _auth.userId;
-      if (uid == null) throw 'Not signed in.';
+      final uid = AuthService.userId;
+      if (uid.isEmpty) throw 'Not signed in.';
       _sessions = await _api.getDueCards(uid);
       _queue     = [];
       _resultIds = [];
@@ -98,7 +97,7 @@ class _SrReviewScreenState extends State<SrReviewScreen>
     setState(() => _submitting = true);
 
     // ── Fire API call in background — do NOT await it ──────────────────────
-    final uid      = _auth.userId ?? '';
+    final uid      = AuthService.userId;
     final resultId = _resultIds[_currentIndex];
     final cardIdx  = _current.cardIndex;
     _api.submitSrReview(

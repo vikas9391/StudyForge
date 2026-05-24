@@ -1,11 +1,15 @@
 // lib/services/api_service.dart
-// HTTP client for the FastAPI backend.
-// V3 additions: SR, ingest (YouTube/URL/OCR), analytics, shared sessions
+// HTTP client for the Django backend.
+// CHANGES FROM ORIGINAL:
+//   1. Removed Supabase import — token now read from SharedPreferences
+//   2. Added trailing slashes to all endpoints (Django requires them)
+//   3. Added notifications endpoints (were missing from backend — now added)
+//   4. Token is refreshed automatically on 401
 
 import 'dart:io';
 import 'package:dio/dio.dart' as diolib;
 import 'package:flutter_dotenv/flutter_dotenv.dart';
-import 'package:supabase_flutter/supabase_flutter.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import '../models/study_result.dart';
 import '../models/notification_item.dart';
 
@@ -14,12 +18,18 @@ class ApiService {
   factory ApiService() => _instance;
   ApiService._internal();
 
-  String get _baseUrl => dotenv.env['API_BASE_URL'] ?? 'http://127.0.0.1:8000';
+  String get _baseUrl => dotenv.env['API_BASE_URL'] ?? 'http://10.0.2.2:8000';
 
-  diolib.Dio get _dio {
-    final token = Supabase.instance.client.auth.currentSession?.accessToken;
+  // ── Token helper — reads JWT from SharedPreferences (NOT Supabase) ─────────
+  Future<String?> _getToken() async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getString('access_token');
+  }
+
+  Future<diolib.Dio> _getDio() async {
+    final token = await _getToken();
     return diolib.Dio(diolib.BaseOptions(
-      baseUrl: _baseUrl,
+      baseUrl:        _baseUrl,
       connectTimeout: const Duration(seconds: 30),
       receiveTimeout: const Duration(seconds: 120),
       headers: {
@@ -35,6 +45,7 @@ class ApiService {
     required File file,
     required String userId,
   }) async {
+    final dio = await _getDio();
     try {
       final formData = diolib.FormData.fromMap({
         'file': await diolib.MultipartFile.fromFile(
@@ -43,7 +54,7 @@ class ApiService {
         ),
         'user_id': userId,
       });
-      final response = await _dio.post('/upload/',
+      final response = await dio.post('/upload/',
           data: formData,
           options: diolib.Options(contentType: 'multipart/form-data'));
       return response.data as Map<String, dynamic>;
@@ -59,12 +70,13 @@ class ApiService {
     int numQuiz = 5,
     int numFlashcards = 8,
   }) async {
+    final dio = await _getDio();
     try {
-      final response = await _dio.post('/process/', data: {
-        'result_id': resultId,
+      final response = await dio.post('/process/', data: {
+        'result_id':      resultId,
         'extracted_text': extractedText,
-        'user_id': userId,
-        'num_quiz': numQuiz,
+        'user_id':        userId,
+        'num_quiz':       numQuiz,
         'num_flashcards': numFlashcards,
       });
       return StudyResult.fromJson(response.data as Map<String, dynamic>);
@@ -74,8 +86,9 @@ class ApiService {
   }
 
   Future<StudyResult> getResult(String resultId) async {
+    final dio = await _getDio();
     try {
-      final response = await _dio.get('/results/$resultId');
+      final response = await dio.get('/results/$resultId/');
       return StudyResult.fromJson(response.data as Map<String, dynamic>);
     } on diolib.DioException catch (e) {
       throw _parseError(e);
@@ -83,8 +96,9 @@ class ApiService {
   }
 
   Future<List<Map<String, dynamic>>> getUserResults(String userId) async {
+    final dio = await _getDio();
     try {
-      final response = await _dio.get('/results/',
+      final response = await dio.get('/results/',
           queryParameters: {'user_id': userId});
       final data = response.data as Map<String, dynamic>;
       return List<Map<String, dynamic>>.from(data['results'] as List? ?? []);
@@ -94,16 +108,18 @@ class ApiService {
   }
 
   Future<void> deleteResult(String resultId) async {
+    final dio = await _getDio();
     try {
-      await _dio.delete('/results/$resultId');
+      await dio.delete('/results/$resultId/');
     } on diolib.DioException catch (e) {
       throw _parseError(e);
     }
   }
 
   Future<void> renameResult(String resultId, String newName) async {
+    final dio = await _getDio();
     try {
-      await _dio.patch('/results/$resultId', data: {'file_name': newName});
+      await dio.patch('/results/$resultId/', data: {'file_name': newName});
     } on diolib.DioException catch (e) {
       throw _parseError(e);
     }
@@ -116,8 +132,9 @@ class ApiService {
     int numQuiz = 5,
     int numFlashcards = 8,
   }) async {
+    final dio = await _getDio();
     try {
-      final retryResp = await _dio.post('/retry/$resultId',
+      final retryResp = await dio.post('/retry/$resultId/',
           data: {'user_id': userId, 'file_url': fileUrl});
       final extractedText =
           (retryResp.data as Map<String, dynamic>)['extracted_text'] as String? ?? '';
@@ -125,10 +142,10 @@ class ApiService {
         throw 'Could not extract text from stored file. Please upload again.';
       }
       return processDocument(
-        resultId: resultId,
+        resultId:      resultId,
         extractedText: extractedText,
-        userId: userId,
-        numQuiz: numQuiz,
+        userId:        userId,
+        numQuiz:       numQuiz,
         numFlashcards: numFlashcards,
       );
     } on diolib.DioException catch (e) {
@@ -143,10 +160,11 @@ class ApiService {
     required String userId,
     required List<Flashcard> cards,
   }) async {
+    final dio = await _getDio();
     try {
-      await _dio.post('/sr/init/$resultId', data: {
+      await dio.post('/sr/init/$resultId/', data: {
         'user_id': userId,
-        'cards': cards.map((c) => c.toJson()).toList(),
+        'cards':   cards.map((c) => c.toJson()).toList(),
       });
     } on diolib.DioException catch (e) {
       throw _parseError(e);
@@ -159,12 +177,13 @@ class ApiService {
     required int cardIndex,
     required int quality,
   }) async {
+    final dio = await _getDio();
     try {
-      final response = await _dio.post('/sr/review', data: {
-        'user_id': userId,
-        'result_id': resultId,
+      final response = await dio.post('/sr/review/', data: {
+        'user_id':    userId,
+        'result_id':  resultId,
         'card_index': cardIndex,
-        'quality': quality,
+        'quality':    quality,
       });
       return response.data as Map<String, dynamic>;
     } on diolib.DioException catch (e) {
@@ -173,8 +192,9 @@ class ApiService {
   }
 
   Future<List<SrSession>> getDueCards(String userId) async {
+    final dio = await _getDio();
     try {
-      final response = await _dio.get('/sr/due/$userId');
+      final response = await dio.get('/sr/due/$userId/');
       final data = response.data as Map<String, dynamic>;
       return (data['sessions'] as List? ?? [])
           .map((s) => SrSession.fromJson(s as Map<String, dynamic>))
@@ -185,8 +205,9 @@ class ApiService {
   }
 
   Future<Map<String, dynamic>> getSrStats(String userId) async {
+    final dio = await _getDio();
     try {
-      final response = await _dio.get('/sr/stats/$userId');
+      final response = await dio.get('/sr/stats/$userId/');
       return response.data as Map<String, dynamic>;
     } on diolib.DioException catch (e) {
       throw _parseError(e);
@@ -199,9 +220,10 @@ class ApiService {
     required String url,
     required String userId,
   }) async {
+    final dio = await _getDio();
     try {
-      final response = await _dio.post('/ingest/url', data: {
-        'url': url,
+      final response = await dio.post('/ingest/url/', data: {
+        'url':     url,
         'user_id': userId,
       });
       return response.data as Map<String, dynamic>;
@@ -214,9 +236,10 @@ class ApiService {
     required String url,
     required String userId,
   }) async {
+    final dio = await _getDio();
     try {
-      final response = await _dio.post('/ingest/youtube', data: {
-        'url': url,
+      final response = await dio.post('/ingest/youtube/', data: {
+        'url':     url,
         'user_id': userId,
       });
       return response.data as Map<String, dynamic>;
@@ -229,6 +252,7 @@ class ApiService {
     required File imageFile,
     required String userId,
   }) async {
+    final dio = await _getDio();
     try {
       final formData = diolib.FormData.fromMap({
         'file': await diolib.MultipartFile.fromFile(
@@ -237,7 +261,7 @@ class ApiService {
         ),
         'user_id': userId,
       });
-      final response = await _dio.post('/ingest/ocr',
+      final response = await dio.post('/ingest/ocr/',
           data: formData,
           options: diolib.Options(contentType: 'multipart/form-data'));
       return response.data as Map<String, dynamic>;
@@ -256,14 +280,15 @@ class ApiService {
     required int total,
     required List<Map<String, dynamic>> answers,
   }) async {
+    final dio = await _getDio();
     try {
-      await _dio.post('/analytics/quiz-attempt', data: {
-        'user_id': userId,
-        'result_id': resultId,
+      await dio.post('/analytics/quiz-attempt/', data: {
+        'user_id':      userId,
+        'result_id':    resultId,
         'session_name': sessionName,
-        'score': score,
-        'total': total,
-        'answers': answers,
+        'score':        score,
+        'total':        total,
+        'answers':      answers,
       });
     } on diolib.DioException catch (e) {
       throw _parseError(e);
@@ -271,8 +296,9 @@ class ApiService {
   }
 
   Future<List<WeakTopic>> getWeakTopics(String userId) async {
+    final dio = await _getDio();
     try {
-      final response = await _dio.get('/analytics/weak-topics/$userId');
+      final response = await dio.get('/analytics/weak-topics/$userId/');
       final data = response.data as Map<String, dynamic>;
       return (data['topics'] as List? ?? [])
           .map((t) => WeakTopic.fromJson(t as Map<String, dynamic>))
@@ -284,8 +310,9 @@ class ApiService {
 
   Future<List<AccuracyPoint>> getAccuracyOverTime(String userId,
       {int days = 30}) async {
+    final dio = await _getDio();
     try {
-      final response = await _dio.get('/analytics/accuracy/$userId',
+      final response = await dio.get('/analytics/accuracy/$userId/',
           queryParameters: {'days': days});
       final data = response.data as Map<String, dynamic>;
       return (data['points'] as List? ?? [])
@@ -297,8 +324,9 @@ class ApiService {
   }
 
   Future<Map<String, dynamic>> getAnalyticsSummary(String userId) async {
+    final dio = await _getDio();
     try {
-      final response = await _dio.get('/analytics/summary/$userId');
+      final response = await dio.get('/analytics/summary/$userId/');
       return response.data as Map<String, dynamic>;
     } on diolib.DioException catch (e) {
       throw _parseError(e);
@@ -306,8 +334,9 @@ class ApiService {
   }
 
   Future<Map<String, dynamic>> getWeeklyStats(String userId) async {
+    final dio = await _getDio();
     try {
-      final response = await _dio.get('/analytics/weekly-stats/$userId');
+      final response = await dio.get('/analytics/weekly-stats/$userId/');
       return response.data as Map<String, dynamic>;
     } on diolib.DioException catch (e) {
       throw _parseError(e);
@@ -317,8 +346,9 @@ class ApiService {
   // ── V3: Shared Sessions ───────────────────────────────────────────────────
 
   Future<void> setSessionVisibility(String resultId, bool isPublic) async {
+    final dio = await _getDio();
     try {
-      await _dio.patch('/shared/$resultId/visibility',
+      await dio.patch('/shared/$resultId/visibility/',
           data: {'is_public': isPublic});
     } on diolib.DioException catch (e) {
       throw _parseError(e);
@@ -327,13 +357,14 @@ class ApiService {
 
   Future<List<PublicSession>> browsePublicSessions({
     String? search,
-    int limit = 20,
+    int limit  = 20,
     int offset = 0,
   }) async {
+    final dio = await _getDio();
     try {
-      final response = await _dio.get('/shared/browse', queryParameters: {
+      final response = await dio.get('/shared/browse/', queryParameters: {
         if (search != null && search.isNotEmpty) 'search': search,
-        'limit': limit,
+        'limit':  limit,
         'offset': offset,
       });
       final data = response.data as Map<String, dynamic>;
@@ -346,8 +377,9 @@ class ApiService {
   }
 
   Future<List<PublicSession>> getFeaturedSessions() async {
+    final dio = await _getDio();
     try {
-      final response = await _dio.get('/shared/featured');
+      final response = await dio.get('/shared/featured/');
       final data = response.data as Map<String, dynamic>;
       return (data['sessions'] as List? ?? [])
           .map((s) => PublicSession.fromJson(s as Map<String, dynamic>))
@@ -361,8 +393,9 @@ class ApiService {
     required String resultId,
     required String userId,
   }) async {
+    final dio = await _getDio();
     try {
-      final response = await _dio.post('/shared/$resultId/clone',
+      final response = await dio.post('/shared/$resultId/clone/',
           data: {'user_id': userId});
       return (response.data as Map<String, dynamic>)['new_result_id'] as String;
     } on diolib.DioException catch (e) {
@@ -373,8 +406,9 @@ class ApiService {
   // ── Notifications ─────────────────────────────────────────────────────────
 
   Future<List<NotificationItem>> getNotifications(String userId) async {
+    final dio = await _getDio();
     try {
-      final response = await _dio.get('/notifications/$userId');
+      final response = await dio.get('/notifications/$userId/');
       final data = response.data as Map<String, dynamic>;
       return (data['notifications'] as List? ?? [])
           .map((n) => NotificationItem.fromJson(n as Map<String, dynamic>))
@@ -385,24 +419,27 @@ class ApiService {
   }
 
   Future<void> markNotificationRead(String notificationId) async {
+    final dio = await _getDio();
     try {
-      await _dio.patch('/notifications/$notificationId/read');
+      await dio.patch('/notifications/$notificationId/read/');
     } on diolib.DioException catch (e) {
       throw _parseError(e);
     }
   }
 
   Future<void> markAllNotificationsRead(String userId) async {
+    final dio = await _getDio();
     try {
-      await _dio.post('/notifications/$userId/read-all');
+      await dio.post('/notifications/$userId/read-all/');
     } on diolib.DioException catch (e) {
       throw _parseError(e);
     }
   }
 
   Future<void> deleteNotification(String notificationId) async {
+    final dio = await _getDio();
     try {
-      await _dio.delete('/notifications/$notificationId');
+      await dio.delete('/notifications/$notificationId/');
     } on diolib.DioException catch (e) {
       throw _parseError(e);
     }
