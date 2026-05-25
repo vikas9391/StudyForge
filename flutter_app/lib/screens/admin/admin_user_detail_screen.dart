@@ -1,11 +1,9 @@
-// lib/screens/admin/admin_user_detail_screen.dart
-// Full view of one user: profile info, all sessions, admin actions.
-
 import 'package:flutter/material.dart';
 import 'package:flutter_animate/flutter_animate.dart';
 import '../../core/constants.dart';
 import '../../models/profile.dart';
 import '../../services/profile_service.dart';
+import '../../services/api_service.dart';
 import '../results_screen.dart';
 import '../../main.dart' show slideRoute;
 
@@ -19,6 +17,7 @@ class AdminUserDetailScreen extends StatefulWidget {
 
 class _AdminUserDetailScreenState extends State<AdminUserDetailScreen> {
   final _profileSvc = ProfileService();
+  final _api        = ApiService();
 
   UserProfile?               _profile;
   List<Map<String, dynamic>> _sessions = [];
@@ -49,69 +48,174 @@ class _AdminUserDetailScreenState extends State<AdminUserDetailScreen> {
     final confirm = await showDialog<bool>(
       context: context,
       builder: (_) => AlertDialog(
-        backgroundColor: AppColors.surfaceCard,
+        backgroundColor: AppColors.surface,
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
-        title: Text(
-          p.isAdmin ? 'Remove Admin?' : 'Make Admin?',
-          style: AppText.subheading,
-        ),
+        title: Text(p.isAdmin ? 'Remove Admin?' : 'Make Admin?',
+            style: TextStyle(
+                fontSize: 16,
+                fontWeight: FontWeight.w700,
+                color: AppColors.textPrimary)),
         content: Text(
           p.isAdmin
               ? 'This will remove admin privileges from ${p.email}.'
               : 'This will grant admin privileges to ${p.email}.',
-          style: AppText.caption,
+          style: TextStyle(color: AppColors.textSecond),
         ),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(context, false),
-            child: Text('Cancel', style: AppText.body
-                .copyWith(color: AppColors.textSecond)),
+            child: Text('Cancel',
+                style: TextStyle(color: AppColors.textSecond)),
           ),
           ElevatedButton(
             onPressed: () => Navigator.pop(context, true),
             style: ElevatedButton.styleFrom(
-              backgroundColor: p.isAdmin
-                  ? AppColors.accentRed
-                  : AppColors.accentAmber),
+                backgroundColor:
+                p.isAdmin ? AppColors.accentRed : AppColors.accentAmber),
             child: Text(p.isAdmin ? 'Remove' : 'Grant'),
           ),
         ],
       ),
     );
-
     if (confirm != true) return;
     try {
       final newVal = await _profileSvc.adminToggleAdmin(widget.userId);
       if (mounted) {
         setState(() {
           _profile = UserProfile.fromJson({
-            ..._profileAsMap(),
-            'is_admin': newVal,
+            ..._profileAsMap(), 'is_admin': newVal,
           });
         });
         _showSnack(newVal
             ? '${p.email} is now Admin ✅'
             : '${p.email} removed from Admin');
       }
-    } catch (e) {
-      _showSnack('Error: $e', error: true);
-    }
+    } catch (e) { _showSnack('Error: $e', error: true); }
+  }
+
+  Future<void> _showSendNotificationDialog() async {
+    final titleCtrl = TextEditingController();
+    final bodyCtrl  = TextEditingController();
+    String selectedType = 'general';
+
+    await showDialog(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setLocal) => AlertDialog(
+          backgroundColor: AppColors.surface,
+          shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(18)),
+          title: Text('Send Notification',
+              style: TextStyle(
+                  fontSize: 16,
+                  fontWeight: FontWeight.w700,
+                  color: AppColors.textPrimary)),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              DropdownButtonFormField<String>(
+                value: selectedType,
+                decoration: InputDecoration(
+                  labelText: 'Type',
+                  labelStyle: TextStyle(color: AppColors.textSecond),
+                  border: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(10)),
+                ),
+                items: ['general', 'ready', 'review', 'streak', 'insight']
+                    .map((t) => DropdownMenuItem(
+                    value: t,
+                    child: Text(t,
+                        style: TextStyle(
+                            color: AppColors.textPrimary))))
+                    .toList(),
+                onChanged: (v) => setLocal(() => selectedType = v!),
+              ),
+              const SizedBox(height: 12),
+              TextField(
+                controller: titleCtrl,
+                style: TextStyle(color: AppColors.textPrimary),
+                decoration: InputDecoration(
+                  labelText: 'Title',
+                  labelStyle: TextStyle(color: AppColors.textSecond),
+                  border: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(10)),
+                  focusedBorder: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(10),
+                      borderSide: BorderSide(
+                          color: AppColors.primary, width: 1.5)),
+                ),
+              ),
+              const SizedBox(height: 12),
+              TextField(
+                controller: bodyCtrl,
+                maxLines: 3,
+                style: TextStyle(color: AppColors.textPrimary),
+                decoration: InputDecoration(
+                  labelText: 'Message',
+                  labelStyle: TextStyle(color: AppColors.textSecond),
+                  border: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(10)),
+                  focusedBorder: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(10),
+                      borderSide: BorderSide(
+                          color: AppColors.primary, width: 1.5)),
+                ),
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(ctx),
+              child: Text('Cancel',
+                  style: TextStyle(color: AppColors.textSecond)),
+            ),
+            ElevatedButton(
+              onPressed: () async {
+                if (titleCtrl.text.trim().isEmpty ||
+                    bodyCtrl.text.trim().isEmpty) return;
+                Navigator.pop(ctx);
+                try {
+                  await _api.adminSendNotification(
+                    userId: widget.userId,
+                    type:   selectedType,
+                    title:  titleCtrl.text.trim(),
+                    body:   bodyCtrl.text.trim(),
+                  );
+                  _showSnack('Notification sent ✅');
+                } catch (e) {
+                  _showSnack('Failed: $e', error: true);
+                }
+              },
+              style: ElevatedButton.styleFrom(
+                  backgroundColor: AppColors.primary),
+              child: const Text('Send',
+                  style: TextStyle(color: Colors.white)),
+            ),
+          ],
+        ),
+      ),
+    );
   }
 
   Future<void> _deleteSession(String sessionId, int index) async {
     final confirm = await showDialog<bool>(
       context: context,
       builder: (_) => AlertDialog(
-        backgroundColor: AppColors.surfaceCard,
+        backgroundColor: AppColors.surface,
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
-        title: Text('Delete Session?', style: AppText.subheading),
-        content: Text('This will permanently remove session #${index + 1}.',
-            style: AppText.caption),
+        title: Text('Delete Session?',
+            style: TextStyle(
+                fontSize: 16,
+                fontWeight: FontWeight.w700,
+                color: AppColors.textPrimary)),
+        content: Text(
+            'This will permanently remove session #${index + 1}.',
+            style: TextStyle(color: AppColors.textSecond)),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(context, false),
-            child: Text('Cancel', style: AppText.body
-                .copyWith(color: AppColors.textSecond)),
+            child: Text('Cancel',
+                style: TextStyle(color: AppColors.textSecond)),
           ),
           ElevatedButton(
             onPressed: () => Navigator.pop(context, true),
@@ -122,7 +226,6 @@ class _AdminUserDetailScreenState extends State<AdminUserDetailScreen> {
         ],
       ),
     );
-
     if (confirm != true) return;
     try {
       await _profileSvc.adminDeleteResult(sessionId);
@@ -130,19 +233,17 @@ class _AdminUserDetailScreenState extends State<AdminUserDetailScreen> {
         setState(() => _sessions.removeWhere((s) => s['id'] == sessionId));
         _showSnack('Session deleted');
       }
-    } catch (e) {
-      _showSnack('Error: $e', error: true);
-    }
+    } catch (e) { _showSnack('Error: $e', error: true); }
   }
 
   Map<String, dynamic> _profileAsMap() => {
-    'id':           _profile!.id,
-    'email':        _profile!.email,
-    'full_name':    _profile!.fullName,
-    'bio':          _profile!.bio,
-    'avatar_url':   _profile!.avatarUrl,
-    'is_admin':     _profile!.isAdmin,
-    'created_at':   _profile!.createdAt,
+    'id':            _profile!.id,
+    'email':         _profile!.email,
+    'full_name':     _profile!.fullName,
+    'bio':           _profile!.bio,
+    'avatar_url':    _profile!.avatarUrl,
+    'is_admin':      _profile!.isAdmin,
+    'created_at':    _profile!.createdAt,
     'session_count': _sessions.length,
   };
 
@@ -166,13 +267,23 @@ class _AdminUserDetailScreenState extends State<AdminUserDetailScreen> {
             PopupMenuButton<String>(
               icon: const Icon(Icons.more_vert_rounded,
                   color: AppColors.textSecond),
-              color:       AppColors.surfaceCard,
+              color: AppColors.surface,
               shape: RoundedRectangleBorder(
                   borderRadius: BorderRadius.circular(12)),
               onSelected: (v) {
                 if (v == 'toggle_admin') _toggleAdmin();
+                if (v == 'send_notif')  _showSendNotificationDialog();
               },
               itemBuilder: (_) => [
+                PopupMenuItem(
+                  value: 'send_notif',
+                  child: Row(children: [
+                    const Icon(Icons.notifications_active_rounded,
+                        color: AppColors.primary, size: 18),
+                    const SizedBox(width: 10),
+                    Text('Send Notification', style: AppText.body),
+                  ]),
+                ),
                 PopupMenuItem(
                   value: 'toggle_admin',
                   child: Row(children: [
@@ -200,10 +311,10 @@ class _AdminUserDetailScreenState extends State<AdminUserDetailScreen> {
         decoration: const BoxDecoration(gradient: AppColors.bgGrad),
         child: _loading
             ? const Center(child: CircularProgressIndicator(
-                color: AppColors.primary, strokeWidth: 2.5))
+            color: AppColors.primary, strokeWidth: 2.5))
             : _error != null
-                ? _buildError()
-                : _buildBody(),
+            ? _buildError()
+            : _buildBody(),
       ),
     );
   }
@@ -219,15 +330,14 @@ class _AdminUserDetailScreenState extends State<AdminUserDetailScreen> {
           padding:    const EdgeInsets.all(20),
           decoration: cardDecoration(),
           child: Column(children: [
-            // Avatar
             Container(
-              width:  64, height: 64,
+              width: 64, height: 64,
               decoration: BoxDecoration(
-                gradient:     p.isAdmin
-                    ? const LinearGradient(colors: [
-                        AppColors.accentAmber, Color(0xFFE67E00)])
-                    : AppColors.primaryGrad,
-                borderRadius: BorderRadius.circular(18)),
+                  gradient:     p.isAdmin
+                      ? const LinearGradient(colors: [
+                    AppColors.accentAmber, Color(0xFFE67E00)])
+                      : AppColors.primaryGrad,
+                  borderRadius: BorderRadius.circular(18)),
               child: Center(child: Text(p.initials,
                   style: AppText.display(22)
                       .copyWith(color: Colors.white))),
@@ -243,10 +353,10 @@ class _AdminUserDetailScreenState extends State<AdminUserDetailScreen> {
                 padding: const EdgeInsets.symmetric(
                     horizontal: 12, vertical: 5),
                 decoration: BoxDecoration(
-                  color:        AppColors.accentAmber.withOpacity(0.12),
-                  borderRadius: BorderRadius.circular(20),
-                  border: Border.all(
-                      color: AppColors.accentAmber.withOpacity(0.4))),
+                    color:        AppColors.accentAmber.withOpacity(0.12),
+                    borderRadius: BorderRadius.circular(20),
+                    border: Border.all(
+                        color: AppColors.accentAmber.withOpacity(0.4))),
                 child: Row(mainAxisSize: MainAxisSize.min, children: [
                   const Icon(Icons.shield_rounded,
                       color: AppColors.accentAmber, size: 14),
@@ -260,9 +370,8 @@ class _AdminUserDetailScreenState extends State<AdminUserDetailScreen> {
             const SizedBox(height: 16),
             const Divider(color: AppColors.borderLight, height: 1),
             const SizedBox(height: 14),
-            // Info rows
             _InfoRow(Icons.fingerprint_rounded, 'User ID',
-                p.id.substring(0, 12) + '…'),
+                '${p.id.substring(0, 12)}…'),
             const SizedBox(height: 8),
             _InfoRow(Icons.calendar_today_rounded, 'Joined',
                 _fmtDate(p.createdAt)),
@@ -281,8 +390,8 @@ class _AdminUserDetailScreenState extends State<AdminUserDetailScreen> {
           Container(
             padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
             decoration: BoxDecoration(
-              color:        AppColors.primary.withOpacity(0.1),
-              borderRadius: BorderRadius.circular(8)),
+                color:        AppColors.primary.withOpacity(0.1),
+                borderRadius: BorderRadius.circular(8)),
             child: Text('${_sessions.length}',
                 style: AppText.label.copyWith(color: AppColors.primary)),
           ),
@@ -309,17 +418,18 @@ class _AdminUserDetailScreenState extends State<AdminUserDetailScreen> {
               key:        Key(id),
               direction:  DismissDirection.endToStart,
               background: Container(
-                margin:       const EdgeInsets.only(bottom: 10),
-                padding:      const EdgeInsets.only(right: 20),
+                margin:     const EdgeInsets.only(bottom: 10),
+                padding:    const EdgeInsets.only(right: 20),
                 decoration: BoxDecoration(
-                  color:        AppColors.accentRed,
-                  borderRadius: BorderRadius.circular(16)),
+                    color:        AppColors.accentRed,
+                    borderRadius: BorderRadius.circular(16)),
                 alignment: Alignment.centerRight,
-                child: const Icon(Icons.delete_rounded, color: Colors.white),
+                child: const Icon(Icons.delete_rounded,
+                    color: Colors.white),
               ),
               confirmDismiss: (_) async {
                 await _deleteSession(id, i);
-                return false; // we handle list update manually
+                return false;
               },
               child: GestureDetector(
                 onTap: () => Navigator.of(context).push(
@@ -332,8 +442,8 @@ class _AdminUserDetailScreenState extends State<AdminUserDetailScreen> {
                     Container(
                       width: 38, height: 38,
                       decoration: BoxDecoration(
-                        gradient:     AppColors.primaryGrad,
-                        borderRadius: BorderRadius.circular(10)),
+                          gradient:     AppColors.primaryGrad,
+                          borderRadius: BorderRadius.circular(10)),
                       child: Center(child: Text('${i + 1}',
                           style: AppText.body.copyWith(
                               color: Colors.white,
@@ -343,17 +453,17 @@ class _AdminUserDetailScreenState extends State<AdminUserDetailScreen> {
                     Expanded(child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                      Text('Session #${i + 1}',
-                          style: AppText.bodySmall
-                              .copyWith(fontWeight: FontWeight.w700)),
-                      const SizedBox(height: 3),
-                      Text(summary, maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: AppText.caption),
-                      const SizedBox(height: 3),
-                      Text(date, style: AppText.label.copyWith(
-                          color: AppColors.textMuted, fontSize: 10)),
-                    ])),
+                          Text('Session #${i + 1}',
+                              style: AppText.bodySmall
+                                  .copyWith(fontWeight: FontWeight.w700)),
+                          const SizedBox(height: 3),
+                          Text(summary, maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: AppText.caption),
+                          const SizedBox(height: 3),
+                          Text(date, style: AppText.label.copyWith(
+                              color: AppColors.textMuted, fontSize: 10)),
+                        ])),
                     const SizedBox(width: 8),
                     const Icon(Icons.chevron_right_rounded,
                         size: 16, color: AppColors.textMuted),
@@ -363,12 +473,12 @@ class _AdminUserDetailScreenState extends State<AdminUserDetailScreen> {
             ).animate().fadeIn(delay: (i * 40).ms).slideX(begin: 0.06);
           }),
 
-        const SizedBox(height: 12),
-        if (_sessions.isNotEmpty)
+        if (_sessions.isNotEmpty) ...[
+          const SizedBox(height: 12),
           Text('← Swipe left on a session to delete',
-              style: AppText.label.copyWith(
-                  color: AppColors.textMuted),
+              style: AppText.label.copyWith(color: AppColors.textMuted),
               textAlign: TextAlign.center),
+        ],
 
         const SizedBox(height: 30),
       ],
@@ -376,7 +486,7 @@ class _AdminUserDetailScreenState extends State<AdminUserDetailScreen> {
   }
 
   Widget _buildError() => Center(child: Column(
-    mainAxisSize: MainAxisSize.min, children: [
+      mainAxisSize: MainAxisSize.min, children: [
     const Icon(Icons.error_outline_rounded,
         size: 48, color: AppColors.accentRed),
     const SizedBox(height: 14),
@@ -395,7 +505,9 @@ class _AdminUserDetailScreenState extends State<AdminUserDetailScreen> {
     try {
       final d = DateTime.parse(iso).toLocal();
       return '${d.day}/${d.month}/${d.year}';
-    } catch (_) { return iso.length >= 10 ? iso.substring(0, 10) : iso; }
+    } catch (_) {
+      return iso.length >= 10 ? iso.substring(0, 10) : iso;
+    }
   }
 }
 

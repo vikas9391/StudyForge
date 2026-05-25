@@ -20,6 +20,7 @@ import 'analytics_screen.dart';
 import 'shared_sessions_screen.dart';
 import 'notifications_screen.dart';
 import '../main.dart' show slideRoute, navigatorKey, AuthGate;
+import '../services/home_cache.dart';
 
 class HomeScreen extends StatefulWidget {
   final VoidCallback? onSignOut;
@@ -54,7 +55,6 @@ class _HomeScreenState extends State<HomeScreen> {
   bool _isOffline = false;
   int _unreadCount = 0;
 
-
   final Map<String, bool> _retrying = {};
 
   AppNavTab _currentTab = AppNavTab.home;
@@ -65,7 +65,8 @@ class _HomeScreenState extends State<HomeScreen> {
   int    _questionsDelta     = 0;
   int    _flashcardsDelta    = 0;
   double _accuracyRate       = 0.0; // 0.0–1.0
-
+  List<SrSession> _srSessions = [];
+  int _totalDueCards = 0;
   // ── Lifecycle ──────────────────────────────────────────────────────────────
 
   @override
@@ -135,66 +136,139 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   // ── Data loading ───────────────────────────────────────────────────────────
+  //
+  // Strategy:
+  //  1. If cache has data → paint UI instantly (no shimmer).
+  //  2. If cache is stale (>3 min) → background-refresh silently.
+  //  3. forceRefresh=true (pull-to-refresh, after upload/delete) → always fetch.
 
-  Future<void> _loadData() async {
-    setState(() => _loading = true);
+  Future<void> _loadData({bool forceRefresh = false}) async {
+    final cache = HomeCache.instance;
+
+    // ── Step 1: Serve from cache immediately ──────────────────────────────
+    if (cache.hasData && !forceRefresh) {
+      if (mounted) {
+        setState(() {
+          _sessions           = List.from(cache.sessions!);
+          _parsed             = List.from(cache.parsed!);
+          _userProfile        = cache.profile;
+          _isAdmin            = cache.profile?.isAdmin ?? false;
+          _questionsThisWeek  = cache.questionsThisWeek;
+          _flashcardsThisWeek = cache.flashcardsThisWeek;
+          _questionsDelta     = cache.questionsDelta;
+          _flashcardsDelta    = cache.flashcardsDelta;
+          _accuracyRate       = cache.accuracyRate;
+          _unreadCount        = cache.unreadCount;
+          _loading            = false;
+          _applyFilter();
+        });
+      }
+      // If still fresh, stop — no network call needed.
+      if (!cache.isStale()) return;
+    } else {
+      // No cache at all → show shimmer while we fetch.
+      if (mounted) setState(() => _loading = true);
+    }
+
+    // ── Step 2: Fetch from network ────────────────────────────────────────
     try {
       final uid = AuthService.userId;
-      if (uid.isNotEmpty) {
-        // ── Sessions (required) ───────────────────────────────────────────
-        final resultsData = await _api.getUserResults(uid);
+      if (uid.isEmpty) return;
 
-        // ── Profile (non-fatal) ───────────────────────────────────────────
-        UserProfile? profile;
+      // Sessions (required)
+      final resultsData = await _api.getUserResults(uid);
+
+      // Profile (non-fatal)
+      UserProfile? profile;
+      try {
+        profile = await _profileSvc.getProfile(uid);
+      } catch (e) {
+        debugPrint('Profile fetch failed: $e');
+      }
+
+      final parsed = resultsData.map((r) => StudyResult.fromJson(r)).toList();
+
+      // Update cache
+      cache.updateSessions(resultsData, parsed);
+      cache.updateProfile(profile);
+
+      if (mounted) {
+        setState(() {
+          _sessions    = resultsData;
+          _parsed      = parsed;
+          _userProfile = profile;
+          _isAdmin     = profile?.isAdmin ?? false;
+          _lastSynced  = DateTime.now();
+          _loading     = false;
+          _applyFilter();
+        });
+      }
+
+      // Stats + notifications (non-fatal, sequential to avoid hammering DB)
+      try {
+        final weeklyStats = await _api.getWeeklyStats(uid);
+        final summary     = await _api.getAnalyticsSummary(uid);
+
+        List<dynamic> notifs = [];
         try {
-          profile = await _profileSvc.getProfile(uid);
+          notifs = await _api.getNotifications(uid);
         } catch (_) {}
+
+        final unread = notifs
+            .where((n) => n is Map
+            ? !(n['is_read'] as bool? ?? false)
+            : !n.isRead)
+            .length;
+
+        final qWeek  = (weeklyStats['questions_this_week']  as num?)?.toInt() ?? 0;
+        final cWeek  = (weeklyStats['flashcards_this_week'] as num?)?.toInt() ?? 0;
+        final qDelta = (weeklyStats['questions_delta']       as num?)?.toInt() ?? 0;
+        final cDelta = (weeklyStats['flashcards_delta']      as num?)?.toInt() ?? 0;
+        final avgAcc =
+            ((summary['avg_accuracy'] as num?)?.toDouble() ?? 0.0) / 100.0;
+
+        cache.updateStats(
+          questionsThisWeek:  qWeek,
+          flashcardsThisWeek: cWeek,
+          questionsDelta:     qDelta,
+          flashcardsDelta:    cDelta,
+          accuracyRate:       avgAcc,
+        );
+        cache.updateUnread(unread);
+        cache.markFetched();
+
+        try {
+          final srSessions = await _api.getDueCards(uid);
+          final dueTotal   = srSessions.fold<int>(
+              0, (s, r) => s + r.cards.length);
+          if (mounted) {
+            setState(() {
+              _srSessions    = srSessions;
+              _totalDueCards = dueTotal;
+            });
+          }
+        } catch (_) {}   // non-fatal — SR section just stays hidden
 
         if (mounted) {
           setState(() {
-            _sessions    = resultsData;
-            _parsed      = resultsData.map((r) => StudyResult.fromJson(r)).toList();
-            _userProfile = profile;
-            _isAdmin     = profile?.isAdmin ?? false;
-            _lastSynced  = DateTime.now();
-            _applyFilter();
+            _questionsThisWeek  = qWeek;
+            _flashcardsThisWeek = cWeek;
+            _questionsDelta     = qDelta;
+            _flashcardsDelta    = cDelta;
+            _accuracyRate       = avgAcc;
+            _unreadCount        = unread;
           });
         }
-
-        // ── Stats (non-fatal) ─────────────────────────────────────────────
-        try {
-          final statsResults = await Future.wait([
-            _api.getWeeklyStats(uid),
-            _api.getAnalyticsSummary(uid),
-          ]);
-
-          final weeklyStats = statsResults[0] as Map<String, dynamic>;
-          final summary     = statsResults[1] as Map<String, dynamic>;
-
-          if (mounted) {
-            setState(() {
-              _questionsThisWeek  = (weeklyStats['questions_this_week']  as num?)?.toInt() ?? 0;
-              _flashcardsThisWeek = (weeklyStats['flashcards_this_week'] as num?)?.toInt() ?? 0;
-              _questionsDelta     = (weeklyStats['questions_delta']       as num?)?.toInt() ?? 0;
-              _flashcardsDelta    = (weeklyStats['flashcards_delta']      as num?)?.toInt() ?? 0;
-              final avgAcc        = (summary['avg_accuracy'] as num?)?.toDouble() ?? 0.0;
-              _accuracyRate       = avgAcc / 100.0;
-            });
-          }
-        } catch (e) {
-          debugPrint('Stats fetch failed: $e');
-        }
-
-        // ── Notifications (non-fatal) ─────────────────────────────────────
-        try {
-          final notifs = await _api.getNotifications(uid);
-          if (mounted) {
-            setState(() => _unreadCount = notifs.where((n) => !n.isRead).length);
-          }
-        } catch (_) {}
+      } catch (e) {
+        debugPrint('Stats/notifications fetch failed: $e');
+        cache.markFetched(); // avoid hammering server on repeated failures
       }
     } catch (e) {
       debugPrint('Core data load failed: $e');
+      if (e.toString().contains('Session expired') && mounted) {
+        await AuthService.clearTokens();
+        widget.onSignOut?.call();
+      }
     } finally {
       if (mounted) setState(() => _loading = false);
     }
@@ -219,6 +293,7 @@ class _HomeScreenState extends State<HomeScreen> {
 
     try {
       await _api.deleteResult(id);
+      HomeCache.instance.invalidate(); // force fresh fetch next visit
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(
         content: Text('Session deleted',
@@ -258,7 +333,9 @@ class _HomeScreenState extends State<HomeScreen> {
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
         title: Text('Rename session',
             style: TextStyle(
-                color: AppColors.textPrimary, fontWeight: FontWeight.w700, fontSize: 16)),
+                color: AppColors.textPrimary,
+                fontWeight: FontWeight.w700,
+                fontSize: 16)),
         content: TextField(
           controller: ctrl, autofocus: true,
           style: TextStyle(color: AppColors.textPrimary),
@@ -277,11 +354,14 @@ class _HomeScreenState extends State<HomeScreen> {
         actions: [
           TextButton(
               onPressed: () => Navigator.pop(ctx),
-              child: Text('Cancel', style: TextStyle(color: AppColors.textSecond))),
+              child: Text('Cancel',
+                  style: TextStyle(color: AppColors.textSecond))),
           TextButton(
               onPressed: () => Navigator.pop(ctx, ctrl.text.trim()),
               child: Text('Save',
-                  style: TextStyle(color: AppColors.primary, fontWeight: FontWeight.w700))),
+                  style: TextStyle(
+                      color: AppColors.primary,
+                      fontWeight: FontWeight.w700))),
         ],
       ),
     );
@@ -305,13 +385,15 @@ class _HomeScreenState extends State<HomeScreen> {
     if (id.isNotEmpty) {
       try {
         await _api.renameResult(id, newName);
+        HomeCache.instance.invalidate(); // keep cache in sync
       } catch (_) {
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(SnackBar(
             content: const Text('Renamed locally — could not sync to server.'),
             backgroundColor: AppColors.accentAmber.withOpacity(0.12),
             behavior: SnackBarBehavior.floating,
-            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+            shape:
+            RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
             margin: const EdgeInsets.fromLTRB(16, 0, 16, 16),
           ));
         }
@@ -334,7 +416,8 @@ class _HomeScreenState extends State<HomeScreen> {
     setState(() => _retrying[id] = true);
 
     try {
-      final result = await _api.retryProcessing(resultId: id, userId: uid, fileUrl: url);
+      final result =
+      await _api.retryProcessing(resultId: id, userId: uid, fileUrl: url);
       if (!mounted) return;
       final updated = {
         ...raw,
@@ -355,6 +438,7 @@ class _HomeScreenState extends State<HomeScreen> {
         _retrying.remove(id);
         _applyFilter();
       });
+      HomeCache.instance.invalidate();
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(
         content: Text('Study materials generated!',
             style: TextStyle(color: AppColors.textPrimary)),
@@ -375,7 +459,8 @@ class _HomeScreenState extends State<HomeScreen> {
               style: const TextStyle(color: Colors.white)),
           backgroundColor: AppColors.accentRed.withOpacity(0.85),
           behavior: SnackBarBehavior.floating,
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+          shape:
+          RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
           margin: const EdgeInsets.fromLTRB(16, 0, 16, 16),
         ));
       }
@@ -394,7 +479,9 @@ class _HomeScreenState extends State<HomeScreen> {
   String get _displayEmail => AuthService.userEmail;
   String get _displayInitials =>
       _userProfile?.initials ??
-          (AuthService.userEmail.isNotEmpty ? AuthService.userEmail[0].toUpperCase() : '?');
+          (AuthService.userEmail.isNotEmpty
+              ? AuthService.userEmail[0].toUpperCase()
+              : '?');
 
   String get _lastSyncedLabel {
     if (_lastSynced == null) return '';
@@ -453,15 +540,13 @@ class _HomeScreenState extends State<HomeScreen> {
   // ── Avatar menu ────────────────────────────────────────────────────────────
 
   void _showAvatarMenu(BuildContext context) async {
-    final RenderBox avatar = context.findRenderObject() as RenderBox;
+    final RenderBox avatar =
+    context.findRenderObject() as RenderBox;
     final RenderBox overlay =
-    Navigator
-        .of(context)
-        .overlay!
-        .context
-        .findRenderObject() as RenderBox;
+    Navigator.of(context).overlay!.context.findRenderObject() as RenderBox;
     final Offset pos = avatar.localToGlobal(
-        Offset(0, avatar.size.height + 8), ancestor: overlay);
+        Offset(0, avatar.size.height + 8),
+        ancestor: overlay);
 
     final result = await showMenu<String>(
       context: context,
@@ -475,28 +560,28 @@ class _HomeScreenState extends State<HomeScreen> {
             enabled: false, padding: EdgeInsets.zero,
             child: _MenuHeader(
                 initials: _displayInitials,
-                name: _displayName,
-                email: _displayEmail)),
+                name:     _displayName,
+                email:    _displayEmail)),
         const PopupMenuDivider(height: 1),
         PopupMenuItem<String>(
-            value: 'profile',
+            value:   'profile',
             padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
-            child: _MenuItem(
+            child:   _MenuItem(
                 icon: Icons.person_outline_rounded, label: 'Profile')),
         if (_isAdmin)
           PopupMenuItem<String>(
-              value: 'admin',
+              value:   'admin',
               padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
-              child: _MenuItem(
-                  icon: Icons.admin_panel_settings_outlined,
+              child:   _MenuItem(
+                  icon:  Icons.admin_panel_settings_outlined,
                   label: 'Admin dashboard',
                   color: AppColors.accentAmber)),
         const PopupMenuDivider(height: 1),
         PopupMenuItem<String>(
-            value: 'signout',
+            value:   'signout',
             padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
-            child: _MenuItem(
-                icon: Icons.logout_rounded,
+            child:   _MenuItem(
+                icon:  Icons.logout_rounded,
                 label: 'Sign out',
                 color: AppColors.accentRed)),
       ],
@@ -505,21 +590,24 @@ class _HomeScreenState extends State<HomeScreen> {
     switch (result) {
       case 'profile':
         await Navigator.of(context).push(slideRoute(const ProfileScreen()));
+        // Don't invalidate — profile change doesn't affect sessions list
         if (mounted) _loadData();
       case 'admin':
-        if (mounted) Navigator.of(context).push(
-            slideRoute(const AdminDashboardScreen()));
+        if (mounted)
+          Navigator.of(context)
+              .push(slideRoute(const AdminDashboardScreen()));
       case 'signout':
-        await AuthService.clearTokens();
+        HomeCache.instance.invalidate();
+        await AuthService.signOut();
         if (!mounted) return;
         widget.onSignOut?.call();
-        AuthService.signOut();
     }
   }
 
   void _showTileMenu(BuildContext context, int filteredIndex) async {
     HapticFeedback.mediumImpact();
-    final RenderBox box     = context.findRenderObject() as RenderBox;
+    final RenderBox box =
+    context.findRenderObject() as RenderBox;
     final RenderBox overlay =
     Navigator.of(context).overlay!.context.findRenderObject() as RenderBox;
     final Offset pos = box.localToGlobal(Offset.zero, ancestor: overlay);
@@ -534,15 +622,16 @@ class _HomeScreenState extends State<HomeScreen> {
       color: AppColors.surface,
       items: [
         PopupMenuItem<String>(
-            value: 'rename',
+            value:   'rename',
             padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
-            child: _MenuItem(
-                icon: Icons.drive_file_rename_outline_rounded, label: 'Rename')),
+            child:   _MenuItem(
+                icon: Icons.drive_file_rename_outline_rounded,
+                label: 'Rename')),
         PopupMenuItem<String>(
-            value: 'delete',
+            value:   'delete',
             padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
-            child: _MenuItem(
-                icon: Icons.delete_outline_rounded,
+            child:   _MenuItem(
+                icon:  Icons.delete_outline_rounded,
                 label: 'Delete',
                 color: AppColors.accentRed)),
       ],
@@ -567,7 +656,8 @@ class _HomeScreenState extends State<HomeScreen> {
                 _buildOfflineBanner(),
                 Expanded(
                   child: RefreshIndicator(
-                    onRefresh: _loadData,
+                    // forceRefresh=true so pull-to-refresh always hits the network
+                    onRefresh: () => _loadData(forceRefresh: true),
                     color: AppColors.primary,
                     backgroundColor: AppColors.surface,
                     child: CustomScrollView(
@@ -577,19 +667,23 @@ class _HomeScreenState extends State<HomeScreen> {
                         SliverToBoxAdapter(child: _buildUploadCTA()),
                         SliverToBoxAdapter(child: _buildStats()),
                         if (!_loading && _mostRecent != null)
-                          SliverToBoxAdapter(child: _buildContinueCard(_mostRecent!)),
-                        SliverToBoxAdapter(child: _buildRecentSourcesHeader()),
+                          SliverToBoxAdapter(
+                              child: _buildContinueCard(_mostRecent!)),
+                        SliverToBoxAdapter(
+                            child: _buildRecentSourcesHeader()),
                         if (_loading)
                           SliverToBoxAdapter(child: _buildShimmer())
                         else if (_sessions.isEmpty)
                           SliverToBoxAdapter(child: _buildEmpty())
-                        else if (_filteredParsed.isEmpty && _searchQuery.isNotEmpty)
+                        else if (_filteredParsed.isEmpty &&
+                              _searchQuery.isNotEmpty)
                             SliverToBoxAdapter(child: _buildNoResults())
                           else
                             SliverToBoxAdapter(child: _buildSourcesCard()),
-                        if (!_loading && _parsed.isNotEmpty)
+                        if (!_loading && _totalDueCards > 0)
                           SliverToBoxAdapter(child: _buildDueForReview()),
-                        const SliverToBoxAdapter(child: SizedBox(height: 110)),
+                        const SliverToBoxAdapter(
+                            child: SizedBox(height: 110)),
                       ],
                     ),
                   ),
@@ -600,7 +694,8 @@ class _HomeScreenState extends State<HomeScreen> {
               left: 0, right: 0, bottom: 0,
               child: AppBottomNav(
                 currentTab: _currentTab,
-                onTabChanged: (tab) => setState(() => _currentTab = tab),
+                onTabChanged: (tab) =>
+                    setState(() => _currentTab = tab),
               ),
             ),
           ],
@@ -619,11 +714,14 @@ class _HomeScreenState extends State<HomeScreen> {
       color: AppColors.accentRed.withOpacity(0.90),
       child: _isOffline
           ? Row(mainAxisAlignment: MainAxisAlignment.center, children: [
-        const Icon(Icons.wifi_off_rounded, color: Colors.white, size: 15),
+        const Icon(Icons.wifi_off_rounded,
+            color: Colors.white, size: 15),
         const SizedBox(width: 8),
         Text("You're offline",
             style: TextStyle(
-                color: Colors.white, fontSize: 13, fontWeight: FontWeight.w500)),
+                color: Colors.white,
+                fontSize: 13,
+                fontWeight: FontWeight.w500)),
       ])
           : null,
     );
@@ -703,8 +801,9 @@ class _HomeScreenState extends State<HomeScreen> {
                   ),
                   child: Stack(
                     children: [
-                      Center(child: Icon(Icons.notifications_outlined,
-                          size: 16, color: AppColors.textSecond)),
+                      Center(
+                          child: Icon(Icons.notifications_outlined,
+                              size: 16, color: AppColors.textSecond)),
                       if (_unreadCount > 0)
                         Positioned(
                           top: 4, right: 4,
@@ -758,18 +857,23 @@ class _HomeScreenState extends State<HomeScreen> {
           children: [
             const Text('Create a study set',
                 style: TextStyle(
-                    color: Colors.white, fontSize: 18, fontWeight: FontWeight.w700)),
+                    color: Colors.white,
+                    fontSize: 18,
+                    fontWeight: FontWeight.w700)),
             const SizedBox(height: 4),
-            Text('Upload any source — we\'ll generate Q&A and flashcards instantly',
+            Text(
+                'Upload any source — we\'ll generate Q&A and flashcards instantly',
                 style: TextStyle(
                     color: Colors.white.withOpacity(0.75), fontSize: 12)),
             const SizedBox(height: 14),
             GestureDetector(
               onTap: () async {
                 HapticFeedback.lightImpact();
-                await Navigator.of(context).push(
-                    slideRoute(UploadScreen(isFirstUpload: _sessions.isEmpty)));
-                _loadData();
+                await Navigator.of(context).push(slideRoute(
+                    UploadScreen(isFirstUpload: _sessions.isEmpty)));
+                // Invalidate so returning home shows new upload
+                HomeCache.instance.invalidate();
+                _loadData(forceRefresh: true);
               },
               child: Container(
                 width: double.infinity,
@@ -785,7 +889,8 @@ class _HomeScreenState extends State<HomeScreen> {
                       width: 28, height: 28,
                       decoration: BoxDecoration(
                         border: Border.all(
-                            color: Colors.white.withOpacity(0.6), width: 1.5),
+                            color: Colors.white.withOpacity(0.6),
+                            width: 1.5),
                         borderRadius: BorderRadius.circular(6),
                       ),
                     ),
@@ -798,7 +903,8 @@ class _HomeScreenState extends State<HomeScreen> {
                     const SizedBox(height: 2),
                     Text('or tap a source below',
                         style: TextStyle(
-                            color: Colors.white.withOpacity(0.6), fontSize: 11)),
+                            color: Colors.white.withOpacity(0.6),
+                            fontSize: 11)),
                   ],
                 ),
               ),
@@ -806,15 +912,23 @@ class _HomeScreenState extends State<HomeScreen> {
             const SizedBox(height: 14),
             Row(
               children: [
-                _SourceButton(label: 'PDF',         icon: Icons.picture_as_pdf_outlined),
+                _SourceButton(
+                    label: 'PDF',
+                    icon: Icons.picture_as_pdf_outlined),
                 const SizedBox(width: 8),
-                _SourceButton(label: 'Link /\nURL', icon: Icons.link_rounded),
+                _SourceButton(
+                    label: 'Link /\nURL', icon: Icons.link_rounded),
                 const SizedBox(width: 8),
-                _SourceButton(label: 'YouTube',     icon: Icons.play_circle_outline_rounded),
+                _SourceButton(
+                    label: 'YouTube',
+                    icon: Icons.play_circle_outline_rounded),
                 const SizedBox(width: 8),
-                _SourceButton(label: 'Camera',      icon: Icons.camera_alt_outlined),
+                _SourceButton(
+                    label: 'Camera', icon: Icons.camera_alt_outlined),
                 const SizedBox(width: 8),
-                _SourceButton(label: 'DOCX',        icon: Icons.description_outlined),
+                _SourceButton(
+                    label: 'DOCX',
+                    icon: Icons.description_outlined),
               ],
             ),
           ],
@@ -826,9 +940,8 @@ class _HomeScreenState extends State<HomeScreen> {
   // ── Stats ──────────────────────────────────────────────────────────────────
 
   Widget _buildStats() {
-    // All-time totals computed locally from loaded sessions
     final totalQ = _sessions.fold<int>(
-        0, (s, r) => s + ((r['quiz']       as List?)?.length ?? 0));
+        0, (s, r) => s + ((r['quiz'] as List?)?.length ?? 0));
     final totalC = _sessions.fold<int>(
         0, (s, r) => s + ((r['flashcards'] as List?)?.length ?? 0));
 
@@ -859,18 +972,18 @@ class _HomeScreenState extends State<HomeScreen> {
           Row(children: [
             Expanded(
               child: _StatCard(
-                label: 'Questions generated',
-                value: '$totalQ',
-                delta: _deltaLabel(_questionsDelta, 'new'),
+                label:      'Questions generated',
+                value:      '$totalQ',
+                delta:      _deltaLabel(_questionsDelta, 'new'),
                 deltaColor: _deltaColor(_questionsDelta),
               ),
             ),
             const SizedBox(width: 10),
             Expanded(
               child: _StatCard(
-                label: 'Flashcards created',
-                value: '$totalC',
-                delta: _deltaLabel(_flashcardsDelta, 'new'),
+                label:      'Flashcards created',
+                value:      '$totalC',
+                delta:      _deltaLabel(_flashcardsDelta, 'new'),
                 deltaColor: _deltaColor(_flashcardsDelta),
               ),
             ),
@@ -879,22 +992,22 @@ class _HomeScreenState extends State<HomeScreen> {
           Row(children: [
             Expanded(
               child: _StatCard(
-                label: 'Docs processed',
-                value: '${_sessions.length}',
-                delta: 'PDFs, links & more',
+                label:      'Docs processed',
+                value:      '${_sessions.length}',
+                delta:      'PDFs, links & more',
                 deltaColor: AppColors.textSecond,
               ),
             ),
             const SizedBox(width: 10),
             Expanded(
               child: _StatCard(
-                label: 'Accuracy rate',
-                value: _accuracyRate > 0
+                label:      'Accuracy rate',
+                value:      _accuracyRate > 0
                     ? '${(_accuracyRate * 100).round()}%'
                     : '—',
-                showBar:  _accuracyRate > 0,
-                barValue: _accuracyRate,
-                delta:    _accuracyRate == 0 ? 'No quizzes yet' : null,
+                showBar:    _accuracyRate > 0,
+                barValue:   _accuracyRate,
+                delta:      _accuracyRate == 0 ? 'No quizzes yet' : null,
                 deltaColor: AppColors.textSecond,
               ),
             ),
@@ -945,7 +1058,8 @@ class _HomeScreenState extends State<HomeScreen> {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Text(name,
-                        maxLines: 1, overflow: TextOverflow.ellipsis,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
                         style: TextStyle(
                             fontSize: 13,
                             fontWeight: FontWeight.w600,
@@ -955,7 +1069,8 @@ class _HomeScreenState extends State<HomeScreen> {
                         session.relativeTime.isNotEmpty
                             ? '${session.relativeTime} · 12 questions left to review'
                             : '12 questions left to review',
-                        style: TextStyle(fontSize: 11, color: AppColors.textSecond)),
+                        style: TextStyle(
+                            fontSize: 11, color: AppColors.textSecond)),
                   ],
                 ),
               ),
@@ -968,7 +1083,7 @@ class _HomeScreenState extends State<HomeScreen> {
                     if (id.isEmpty) return;
                     HapticFeedback.lightImpact();
                     Navigator.of(context)
-                        .push(slideRoute(ResultsScreen(resultId: id)));
+                        .push(slideRoute(ResultsScreen(resultId: id, initialTab: 1)));
                   },
                   child: Container(
                     padding: const EdgeInsets.symmetric(vertical: 11),
@@ -986,17 +1101,25 @@ class _HomeScreenState extends State<HomeScreen> {
               ),
               const SizedBox(width: 10),
               Expanded(
-                child: Container(
-                  padding: const EdgeInsets.symmetric(vertical: 11),
-                  decoration: BoxDecoration(
-                      color: AppColors.continueAmberBg,
-                      borderRadius: BorderRadius.circular(10)),
-                  child: Center(
-                      child: Text('Flashcards',
-                          style: TextStyle(
-                              color: AppColors.continueAmberFg,
-                              fontSize: 13,
-                              fontWeight: FontWeight.w600))),
+                child: GestureDetector(
+                  onTap: () {
+                    if (id.isEmpty) return;
+                    HapticFeedback.lightImpact();
+                    Navigator.of(context)
+                        .push(slideRoute(ResultsScreen(resultId: id, initialTab: 2)));
+                  },
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(vertical: 11),
+                    decoration: BoxDecoration(
+                        color: AppColors.continueAmberBg,
+                        borderRadius: BorderRadius.circular(10)),
+                    child: Center(
+                        child: Text('Flashcards',
+                            style: TextStyle(
+                                color: AppColors.continueAmberFg,
+                                fontSize: 13,
+                                fontWeight: FontWeight.w600))),
+                  ),
                 ),
               ),
             ]),
@@ -1021,7 +1144,8 @@ class _HomeScreenState extends State<HomeScreen> {
           const SizedBox(width: 8),
           if (_sessions.isNotEmpty)
             Container(
-                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                padding:
+                const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
                 decoration: BoxDecoration(
                     color: AppColors.primaryGlow,
                     borderRadius: BorderRadius.circular(20)),
@@ -1089,15 +1213,19 @@ class _HomeScreenState extends State<HomeScreen> {
               ? GestureDetector(
             onTap: () {
               _searchCtrl.clear();
-              setState(() { _searchQuery = ''; _applyFilter(); });
+              setState(() {
+                _searchQuery = '';
+                _applyFilter();
+              });
             },
             child: Icon(Icons.close_rounded,
                 size: 16, color: AppColors.textSecond),
           )
               : null,
-          filled:          true,
-          fillColor:       AppColors.surface,
-          contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+          filled:         true,
+          fillColor:      AppColors.surface,
+          contentPadding: const EdgeInsets.symmetric(
+              horizontal: 16, vertical: 12),
           border: OutlineInputBorder(
               borderRadius: BorderRadius.circular(14),
               borderSide: BorderSide(color: AppColors.border)),
@@ -1106,7 +1234,8 @@ class _HomeScreenState extends State<HomeScreen> {
               borderSide: BorderSide(color: AppColors.border)),
           focusedBorder: OutlineInputBorder(
               borderRadius: BorderRadius.circular(14),
-              borderSide: BorderSide(color: AppColors.primary, width: 1.5)),
+              borderSide:
+              BorderSide(color: AppColors.primary, width: 1.5)),
         ),
       ),
     ).animate().fadeIn(duration: 200.ms).slideY(begin: -0.1);
@@ -1169,12 +1298,16 @@ class _HomeScreenState extends State<HomeScreen> {
     final summary    = isPending ? '' : parsed.summary;
     final isRetrying = _retrying[id] == true;
 
-    final accent   = AppColors.tileAccents[filteredIndex % AppColors.tileAccents.length];
-    final accentBg = AppColors.tileAccentBgs[filteredIndex % AppColors.tileAccentBgs.length];
+    final accent =
+    AppColors.tileAccents[filteredIndex % AppColors.tileAccents.length];
+    final accentBg =
+    AppColors.tileAccentBgs[filteredIndex % AppColors.tileAccentBgs.length];
 
     const tileIcons = [
-      Icons.description_outlined, Icons.language_rounded,
-      Icons.notes_rounded,        Icons.play_circle_outline_rounded,
+      Icons.description_outlined,
+      Icons.language_rounded,
+      Icons.notes_rounded,
+      Icons.play_circle_outline_rounded,
     ];
 
     final isLast = filteredIndex == _filteredParsed.length - 1;
@@ -1188,28 +1321,33 @@ class _HomeScreenState extends State<HomeScreen> {
         decoration: BoxDecoration(
           color: AppColors.accentRed.withOpacity(0.10),
           borderRadius: BorderRadius.circular(14),
-          border: Border.all(color: AppColors.accentRed.withOpacity(0.25)),
+          border:
+          Border.all(color: AppColors.accentRed.withOpacity(0.25)),
         ),
         alignment: Alignment.centerRight,
         padding: const EdgeInsets.only(right: 20),
-        child: Icon(Icons.delete_outline_rounded, color: AppColors.accentRed),
+        child:
+        Icon(Icons.delete_outline_rounded, color: AppColors.accentRed),
       ),
       child: Builder(
         builder: (tileCtx) => GestureDetector(
           onTap: () {
             if (isPending || id.isEmpty) return;
             HapticFeedback.lightImpact();
-            Navigator.of(context).push(slideRoute(ResultsScreen(resultId: id)));
+            Navigator.of(context)
+                .push(slideRoute(ResultsScreen(resultId: id)));
           },
           onLongPress: () => _showTileMenu(tileCtx, filteredIndex),
           child: Container(
-            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+            padding:
+            const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
             decoration: BoxDecoration(
                 border: isLast
                     ? null
                     : Border(
                     bottom: BorderSide(
-                        color: AppColors.border.withOpacity(0.5)))),
+                        color:
+                        AppColors.border.withOpacity(0.5)))),
             child: Row(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
@@ -1219,8 +1357,11 @@ class _HomeScreenState extends State<HomeScreen> {
                       color: accentBg,
                       borderRadius: BorderRadius.circular(10)),
                   child: Center(
-                      child: Icon(tileIcons[filteredIndex % tileIcons.length],
-                          size: 18, color: accent)),
+                      child: Icon(
+                          tileIcons[
+                          filteredIndex % tileIcons.length],
+                          size: 18,
+                          color: accent)),
                 ),
                 const SizedBox(width: 12),
                 Expanded(
@@ -1230,7 +1371,8 @@ class _HomeScreenState extends State<HomeScreen> {
                       Row(children: [
                         Expanded(
                           child: Text(title,
-                              maxLines: 1, overflow: TextOverflow.ellipsis,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
                               style: TextStyle(
                                   fontSize: 13,
                                   fontWeight: FontWeight.w600,
@@ -1241,8 +1383,10 @@ class _HomeScreenState extends State<HomeScreen> {
                             padding: const EdgeInsets.symmetric(
                                 horizontal: 8, vertical: 3),
                             decoration: BoxDecoration(
-                                color: AppColors.accentAmber.withOpacity(0.10),
-                                borderRadius: BorderRadius.circular(20)),
+                                color: AppColors.accentAmber
+                                    .withOpacity(0.10),
+                                borderRadius:
+                                BorderRadius.circular(20)),
                             child: Text('Processing',
                                 style: TextStyle(
                                     fontSize: 10,
@@ -1251,20 +1395,26 @@ class _HomeScreenState extends State<HomeScreen> {
                           ),
                         if (isRetrying)
                           SizedBox(
-                              width: 14, height: 14,
+                              width: 14,
+                              height: 14,
                               child: CircularProgressIndicator(
-                                  strokeWidth: 2, color: AppColors.primary)),
+                                  strokeWidth: 2,
+                                  color: AppColors.primary)),
                       ]),
                       const SizedBox(height: 2),
                       Text(timeLabel,
                           style: TextStyle(
-                              fontSize: 11, color: AppColors.textSecond)),
+                              fontSize: 11,
+                              color: AppColors.textSecond)),
                       if (summary.isNotEmpty) ...[
                         const SizedBox(height: 4),
                         Text(summary,
-                            maxLines: 2, overflow: TextOverflow.ellipsis,
+                            maxLines: 2,
+                            overflow: TextOverflow.ellipsis,
                             style: TextStyle(
-                                fontSize: 12, height: 1.45, color: AppColors.textBody)),
+                                fontSize: 12,
+                                height: 1.45,
+                                color: AppColors.textBody)),
                       ],
                       const SizedBox(height: 8),
                       if (isPending && !isRetrying)
@@ -1274,20 +1424,26 @@ class _HomeScreenState extends State<HomeScreen> {
                             padding: const EdgeInsets.symmetric(
                                 horizontal: 10, vertical: 4),
                             decoration: BoxDecoration(
-                                color: AppColors.primary.withOpacity(0.10),
-                                borderRadius: BorderRadius.circular(10),
+                                color: AppColors.primary
+                                    .withOpacity(0.10),
+                                borderRadius:
+                                BorderRadius.circular(10),
                                 border: Border.all(
-                                    color: AppColors.primary.withOpacity(0.3))),
-                            child: Row(mainAxisSize: MainAxisSize.min, children: [
-                              Icon(Icons.refresh_rounded,
-                                  size: 12, color: AppColors.primary),
-                              const SizedBox(width: 4),
-                              Text('Retry generation',
-                                  style: TextStyle(
-                                      fontSize: 11,
-                                      fontWeight: FontWeight.w600,
-                                      color: AppColors.primary)),
-                            ]),
+                                    color: AppColors.primary
+                                        .withOpacity(0.3))),
+                            child: Row(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  Icon(Icons.refresh_rounded,
+                                      size: 12,
+                                      color: AppColors.primary),
+                                  const SizedBox(width: 4),
+                                  Text('Retry generation',
+                                      style: TextStyle(
+                                          fontSize: 11,
+                                          fontWeight: FontWeight.w600,
+                                          color: AppColors.primary)),
+                                ]),
                           ),
                         )
                       else if (!isRetrying)
@@ -1325,8 +1481,8 @@ class _HomeScreenState extends State<HomeScreen> {
   // ── Due for review ─────────────────────────────────────────────────────────
 
   Widget _buildDueForReview() {
-    final reviewItems = _parsed.take(3).toList();
-    final totalCards  = reviewItems.fold<int>(0, (s, r) => s + r.flashcards.length);
+    // Use real SR data, up to 3 sessions
+    final reviewSessions = _srSessions.take(3).toList();
 
     return Padding(
       padding: const EdgeInsets.fromLTRB(14, 14, 14, 0),
@@ -1343,22 +1499,27 @@ class _HomeScreenState extends State<HomeScreen> {
             Row(
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
-                Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                  Text('Due for review',
-                      style: TextStyle(
-                          fontSize: 15,
-                          fontWeight: FontWeight.w700,
-                          color: AppColors.textPrimary)),
-                  const SizedBox(height: 2),
-                  Text('Spaced repetition keeps it fresh',
-                      style: TextStyle(fontSize: 11, color: AppColors.textSecond)),
-                ]),
+                Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text('Due for review',
+                          style: TextStyle(
+                              fontSize: 15,
+                              fontWeight: FontWeight.w700,
+                              color: AppColors.textPrimary)),
+                      const SizedBox(height: 2),
+                      Text('Spaced repetition keeps it fresh',
+                          style: TextStyle(
+                              fontSize: 11,
+                              color: AppColors.textSecond)),
+                    ]),
                 Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+                    padding: const EdgeInsets.symmetric(
+                        horizontal: 10, vertical: 5),
                     decoration: BoxDecoration(
                         color: AppColors.reviewRedBg,
                         borderRadius: BorderRadius.circular(20)),
-                    child: Text('$totalCards cards',
+                    child: Text('$_totalDueCards cards',
                         style: TextStyle(
                             color: AppColors.reviewRedFg,
                             fontSize: 11,
@@ -1366,40 +1527,52 @@ class _HomeScreenState extends State<HomeScreen> {
               ],
             ),
             const SizedBox(height: 12),
-            ...List.generate(reviewItems.length, (i) {
-              final session = reviewItems[i];
-              final idx     = _parsed.indexOf(session);
-              final name    = session.displayName(idx < 0 ? i : idx);
-              final count   = session.flashcards.length;
+            ...List.generate(reviewSessions.length, (i) {
+              final session  = reviewSessions[i];
+              final dueCount = session.cards.length;
+              // Find the matching parsed session name by resultId
+              final matchIdx = _sessions.indexWhere(
+                      (s) => (s['result_id'] ?? s['id']) == session.resultId);
+              final name = matchIdx >= 0
+                  ? _parsed[matchIdx].displayName(matchIdx)
+                  : 'Session ${i + 1}';
+
               return Container(
                 padding: const EdgeInsets.symmetric(vertical: 9),
                 decoration: BoxDecoration(
-                    border: i < reviewItems.length - 1
-                        ? Border(bottom: BorderSide(
-                        color: AppColors.border.withOpacity(0.5)))
+                    border: i < reviewSessions.length - 1
+                        ? Border(
+                        bottom: BorderSide(
+                            color: AppColors.border.withOpacity(0.5)))
                         : null),
                 child: Row(children: [
                   Container(
                       width: 8, height: 8,
                       decoration: BoxDecoration(
-                          color: AppColors.reviewDots[i % AppColors.reviewDots.length],
+                          color: AppColors.reviewDots[
+                          i % AppColors.reviewDots.length],
                           shape: BoxShape.circle)),
                   const SizedBox(width: 12),
                   Expanded(
                       child: Text(name,
-                          maxLines: 1, overflow: TextOverflow.ellipsis,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
                           style: TextStyle(
-                              fontSize: 13, color: AppColors.textPrimary))),
+                              fontSize: 13,
+                              color: AppColors.textPrimary))),
                   Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 3),
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 10, vertical: 3),
                       decoration: BoxDecoration(
-                          color: AppColors.reviewCountBgs[i % AppColors.reviewCountBgs.length],
+                          color: AppColors.reviewCountBgs[
+                          i % AppColors.reviewCountBgs.length],
                           borderRadius: BorderRadius.circular(20)),
-                      child: Text('$count',
+                      child: Text('$dueCount',
                           style: TextStyle(
                               fontSize: 12,
                               fontWeight: FontWeight.w700,
-                              color: AppColors.reviewCountFgs[i % AppColors.reviewCountFgs.length]))),
+                              color: AppColors.reviewCountFgs[
+                              i % AppColors.reviewCountFgs.length]))),
                 ]),
               );
             }),
@@ -1407,7 +1580,8 @@ class _HomeScreenState extends State<HomeScreen> {
             GestureDetector(
               onTap: () {
                 HapticFeedback.lightImpact();
-                Navigator.of(context).push(slideRoute(const SrReviewScreen()));
+                Navigator.of(context)
+                    .push(slideRoute(const SrReviewScreen()));
               },
               child: Container(
                 width: double.infinity,
@@ -1428,7 +1602,6 @@ class _HomeScreenState extends State<HomeScreen> {
       ),
     ).animate().fadeIn(delay: 300.ms, duration: 350.ms);
   }
-
   // ── Empty / no-results / shimmer ───────────────────────────────────────────
 
   Widget _buildEmpty() {
@@ -1455,10 +1628,15 @@ class _HomeScreenState extends State<HomeScreen> {
               'Upload your first document above\nand we\'ll create a study set for you.',
               textAlign: TextAlign.center,
               style: TextStyle(
-                  fontSize: 14, height: 1.55, color: AppColors.textSecond)),
+                  fontSize: 14,
+                  height: 1.55,
+                  color: AppColors.textSecond)),
         ]),
       ),
-    ).animate().fadeIn(duration: 400.ms).scale(begin: const Offset(0.95, 0.95));
+    )
+        .animate()
+        .fadeIn(duration: 400.ms)
+        .scale(begin: const Offset(0.95, 0.95));
   }
 
   Widget _buildNoResults() {
@@ -1466,12 +1644,15 @@ class _HomeScreenState extends State<HomeScreen> {
       padding: const EdgeInsets.symmetric(vertical: 40, horizontal: 24),
       child: Center(
         child: Column(children: [
-          Icon(Icons.search_off_rounded, size: 36, color: AppColors.textSecond),
+          Icon(Icons.search_off_rounded,
+              size: 36, color: AppColors.textSecond),
           const SizedBox(height: 12),
           Text('No sessions match "$_searchQuery"',
               textAlign: TextAlign.center,
               style: TextStyle(
-                  fontSize: 14, color: AppColors.textSecond, height: 1.5)),
+                  fontSize: 14,
+                  color: AppColors.textSecond,
+                  height: 1.5)),
         ]),
       ),
     ).animate().fadeIn(duration: 300.ms);
@@ -1481,16 +1662,20 @@ class _HomeScreenState extends State<HomeScreen> {
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 14),
       child: Column(
-        children: List.generate(3, (i) => Container(
-          margin: const EdgeInsets.only(bottom: 10),
-          height: 80,
-          decoration: BoxDecoration(
-              color: AppColors.surface,
-              borderRadius: BorderRadius.circular(18),
-              border: Border.all(color: AppColors.border)),
-        )
-            .animate(onPlay: (c) => c.repeat(reverse: true))
-            .shimmer(duration: 1100.ms, color: AppColors.primaryGlow)),
+        children: List.generate(
+            3,
+                (i) => Container(
+              margin: const EdgeInsets.only(bottom: 10),
+              height: 80,
+              decoration: BoxDecoration(
+                  color: AppColors.surface,
+                  borderRadius: BorderRadius.circular(18),
+                  border: Border.all(color: AppColors.border)),
+            )
+                .animate(onPlay: (c) => c.repeat(reverse: true))
+                .shimmer(
+                duration: 1100.ms,
+                color: AppColors.primaryGlow)),
       ),
     );
   }
@@ -1541,7 +1726,8 @@ class _StatCard extends StatelessWidget {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Text(label,
-              style: TextStyle(fontSize: 11, color: AppColors.textSecond)),
+              style:
+              TextStyle(fontSize: 11, color: AppColors.textSecond)),
           const SizedBox(height: 4),
           TweenAnimationBuilder<double>(
             tween: Tween(begin: 0, end: 1),
@@ -1630,12 +1816,15 @@ class _Pill extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => Container(
-    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+    padding:
+    const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
     decoration: BoxDecoration(
         color: bg, borderRadius: BorderRadius.circular(20)),
     child: Text(label,
         style: TextStyle(
-            fontSize: 10, fontWeight: FontWeight.w600, color: color)),
+            fontSize: 10,
+            fontWeight: FontWeight.w600,
+            color: color)),
   );
 }
 
@@ -1707,7 +1896,9 @@ class _MenuItem extends StatelessWidget {
       const SizedBox(width: 10),
       Text(label,
           style: TextStyle(
-              fontSize: 13.5, fontWeight: FontWeight.w500, color: c)),
+              fontSize: 13.5,
+              fontWeight: FontWeight.w500,
+              color: c)),
     ]);
   }
 }

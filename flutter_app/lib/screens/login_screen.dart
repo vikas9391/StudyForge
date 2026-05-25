@@ -415,7 +415,7 @@ class _LoginScreenState extends State<LoginScreen>
                       color: AppColors.textSecond.withOpacity(0.5)),
                   const SizedBox(width: 5),
                   Text(
-                    'Secured with Supabase Auth',
+                    'Secured with JWT Auth',
                     style: TextStyle(
                       fontSize: 11,
                       color: AppColors.textSecond.withOpacity(0.5),

@@ -17,7 +17,8 @@ import 'sr_review_screen.dart';
 
 class ResultsScreen extends StatefulWidget {
   final String resultId;
-  const ResultsScreen({super.key, required this.resultId});
+  final int initialTab; // 0=Summary, 1=Quiz, 2=Flashcards
+  const ResultsScreen({super.key, required this.resultId, this.initialTab = 0});
 
   @override
   State<ResultsScreen> createState() => _ResultsScreenState();
@@ -40,9 +41,10 @@ class _ResultsScreenState extends State<ResultsScreen>
   @override
   void initState() {
     super.initState();
-    _tabs = TabController(length: 3, vsync: this);
+    _tabs = TabController(length: 3, vsync: this, initialIndex: widget.initialTab);
     _fetchResult();
   }
+
 
   @override
   void dispose() {

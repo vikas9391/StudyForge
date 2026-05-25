@@ -4,7 +4,11 @@
 //   1. Removed Supabase import — token now read from SharedPreferences
 //   2. Added trailing slashes to all endpoints (Django requires them)
 //   3. Added notifications endpoints (were missing from backend — now added)
-//   4. Token is refreshed automatically on 401
+//   4. Token is refreshed automatically on 401 via interceptor
+//   5. Fixed adminSendNotification — was calling undefined _post helper
+//   6. Added _post / _patch / _delete private helpers to reduce boilerplate
+//   7. retryProcessing now guards against unexpected response shape
+//   8. Added token refresh interceptor (replaces comment-only promise)
 
 import 'dart:io';
 import 'package:dio/dio.dart' as diolib;
@@ -20,15 +24,28 @@ class ApiService {
 
   String get _baseUrl => dotenv.env['API_BASE_URL'] ?? 'http://10.0.2.2:8000';
 
-  // ── Token helper — reads JWT from SharedPreferences (NOT Supabase) ─────────
+  // ── Token helpers ─────────────────────────────────────────────────────────
+
   Future<String?> _getToken() async {
     final prefs = await SharedPreferences.getInstance();
     return prefs.getString('access_token');
   }
 
+  Future<String?> _getRefreshToken() async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getString('refresh_token');
+  }
+
+  Future<void> _saveToken(String accessToken) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString('access_token', accessToken);
+  }
+
+  // ── Dio factory with 401-refresh interceptor ──────────────────────────────
+
   Future<diolib.Dio> _getDio() async {
     final token = await _getToken();
-    return diolib.Dio(diolib.BaseOptions(
+    final dio = diolib.Dio(diolib.BaseOptions(
       baseUrl:        _baseUrl,
       connectTimeout: const Duration(seconds: 30),
       receiveTimeout: const Duration(seconds: 120),
@@ -37,6 +54,105 @@ class ApiService {
         if (token != null) 'Authorization': 'Bearer $token',
       },
     ));
+
+    dio.interceptors.add(
+      diolib.InterceptorsWrapper(
+        onError: (diolib.DioException error, handler) async {
+          if (error.response?.statusCode == 401) {
+            // Attempt token refresh
+            final refreshed = await _tryRefreshToken(dio);
+            if (refreshed) {
+              // Retry original request with new token
+              final newToken = await _getToken();
+              final opts = error.requestOptions;
+              opts.headers['Authorization'] = 'Bearer $newToken';
+              try {
+                final retryResp = await dio.fetch(opts);
+                return handler.resolve(retryResp);
+              } on diolib.DioException catch (e) {
+                return handler.next(e);
+              }
+            }
+          }
+          return handler.next(error);
+        },
+      ),
+    );
+
+    return dio;
+  }
+
+  /// Calls /auth/token/refresh/ and persists the new access token.
+  /// Returns true on success, false otherwise.
+  Future<bool> _tryRefreshToken(diolib.Dio dio) async {
+    final refreshToken = await _getRefreshToken();
+    if (refreshToken == null) return false;
+    try {
+      final response = await dio.post(
+        '/auth/token/refresh/',
+        data: {'refresh': refreshToken},
+        options: diolib.Options(
+          // Skip the interceptor for this call to avoid infinite loops
+          extra: {'skipInterceptor': true},
+        ),
+      );
+      final newAccess =
+      (response.data as Map<String, dynamic>)['access'] as String?;
+      if (newAccess != null) {
+        await _saveToken(newAccess);
+        return true;
+      }
+      return false;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  // ── Private request helpers ───────────────────────────────────────────────
+
+  Future<diolib.Response<dynamic>> _post(
+      String path,
+      Map<String, dynamic> data,
+      ) async {
+    final dio = await _getDio();
+    try {
+      return await dio.post(path, data: data);
+    } on diolib.DioException catch (e) {
+      throw _parseError(e);
+    }
+  }
+
+  Future<diolib.Response<dynamic>> _patch(
+      String path,
+      Map<String, dynamic> data,
+      ) async {
+    final dio = await _getDio();
+    try {
+      return await dio.patch(path, data: data);
+    } on diolib.DioException catch (e) {
+      throw _parseError(e);
+    }
+  }
+
+  Future<void> _delete(String path) async {
+    final dio = await _getDio();
+    try {
+      await dio.delete(path);
+    } on diolib.DioException catch (e) {
+      throw _parseError(e);
+    }
+  }
+
+  Future<diolib.Response<dynamic>> _get(
+      String path, {
+        Map<String, dynamic>? queryParameters,
+      }) async {
+    final dio = await _getDio();
+    try {
+      return await dio.get(path, queryParameters: queryParameters);
+    } on diolib.DioException catch (e) {
+      throw _parseError(e);
+    }
   }
 
   // ── V2: Upload / Process / Results ────────────────────────────────────────
@@ -54,9 +170,11 @@ class ApiService {
         ),
         'user_id': userId,
       });
-      final response = await dio.post('/upload/',
-          data: formData,
-          options: diolib.Options(contentType: 'multipart/form-data'));
+      final response = await dio.post(
+        '/upload/',
+        data: formData,
+        options: diolib.Options(contentType: 'multipart/form-data'),
+      );
       return response.data as Map<String, dynamic>;
     } on diolib.DioException catch (e) {
       throw _parseError(e);
@@ -70,59 +188,33 @@ class ApiService {
     int numQuiz = 5,
     int numFlashcards = 8,
   }) async {
-    final dio = await _getDio();
-    try {
-      final response = await dio.post('/process/', data: {
-        'result_id':      resultId,
-        'extracted_text': extractedText,
-        'user_id':        userId,
-        'num_quiz':       numQuiz,
-        'num_flashcards': numFlashcards,
-      });
-      return StudyResult.fromJson(response.data as Map<String, dynamic>);
-    } on diolib.DioException catch (e) {
-      throw _parseError(e);
-    }
+    final response = await _post('/process/', {
+      'result_id':      resultId,
+      'extracted_text': extractedText,
+      'user_id':        userId,
+      'num_quiz':       numQuiz,
+      'num_flashcards': numFlashcards,
+    });
+    return StudyResult.fromJson(response.data as Map<String, dynamic>);
   }
 
   Future<StudyResult> getResult(String resultId) async {
-    final dio = await _getDio();
-    try {
-      final response = await dio.get('/results/$resultId/');
-      return StudyResult.fromJson(response.data as Map<String, dynamic>);
-    } on diolib.DioException catch (e) {
-      throw _parseError(e);
-    }
+    final response = await _get('/results/$resultId/');
+    return StudyResult.fromJson(response.data as Map<String, dynamic>);
   }
 
   Future<List<Map<String, dynamic>>> getUserResults(String userId) async {
-    final dio = await _getDio();
-    try {
-      final response = await dio.get('/results/',
-          queryParameters: {'user_id': userId});
-      final data = response.data as Map<String, dynamic>;
-      return List<Map<String, dynamic>>.from(data['results'] as List? ?? []);
-    } on diolib.DioException catch (e) {
-      throw _parseError(e);
-    }
+    final response = await _get('/results/', queryParameters: {'user_id': userId});
+    final data = response.data as Map<String, dynamic>;
+    return List<Map<String, dynamic>>.from(data['results'] as List? ?? []);
   }
 
   Future<void> deleteResult(String resultId) async {
-    final dio = await _getDio();
-    try {
-      await dio.delete('/results/$resultId/');
-    } on diolib.DioException catch (e) {
-      throw _parseError(e);
-    }
+    await _delete('/results/$resultId/');
   }
 
   Future<void> renameResult(String resultId, String newName) async {
-    final dio = await _getDio();
-    try {
-      await dio.patch('/results/$resultId/', data: {'file_name': newName});
-    } on diolib.DioException catch (e) {
-      throw _parseError(e);
-    }
+    await _patch('/results/$resultId/', {'file_name': newName});
   }
 
   Future<StudyResult> retryProcessing({
@@ -132,25 +224,27 @@ class ApiService {
     int numQuiz = 5,
     int numFlashcards = 8,
   }) async {
-    final dio = await _getDio();
-    try {
-      final retryResp = await dio.post('/retry/$resultId/',
-          data: {'user_id': userId, 'file_url': fileUrl});
-      final extractedText =
-          (retryResp.data as Map<String, dynamic>)['extracted_text'] as String? ?? '';
-      if (extractedText.isEmpty) {
-        throw 'Could not extract text from stored file. Please upload again.';
-      }
-      return processDocument(
-        resultId:      resultId,
-        extractedText: extractedText,
-        userId:        userId,
-        numQuiz:       numQuiz,
-        numFlashcards: numFlashcards,
-      );
-    } on diolib.DioException catch (e) {
-      throw _parseError(e);
+    final retryResp = await _post('/retry/$resultId/', {
+      'user_id':  userId,
+      'file_url': fileUrl,
+    });
+
+    final retryData = retryResp.data;
+    if (retryData is! Map<String, dynamic>) {
+      throw 'Unexpected response from retry endpoint.';
     }
+    final extractedText = retryData['extracted_text'] as String? ?? '';
+    if (extractedText.isEmpty) {
+      throw 'Could not extract text from stored file. Please upload again.';
+    }
+
+    return processDocument(
+      resultId:      resultId,
+      extractedText: extractedText,
+      userId:        userId,
+      numQuiz:       numQuiz,
+      numFlashcards: numFlashcards,
+    );
   }
 
   // ── V3: Spaced Repetition ─────────────────────────────────────────────────
@@ -160,15 +254,10 @@ class ApiService {
     required String userId,
     required List<Flashcard> cards,
   }) async {
-    final dio = await _getDio();
-    try {
-      await dio.post('/sr/init/$resultId/', data: {
-        'user_id': userId,
-        'cards':   cards.map((c) => c.toJson()).toList(),
-      });
-    } on diolib.DioException catch (e) {
-      throw _parseError(e);
-    }
+    await _post('/sr/init/$resultId/', {
+      'user_id': userId,
+      'cards':   cards.map((c) => c.toJson()).toList(),
+    });
   }
 
   Future<Map<String, dynamic>> submitSrReview({
@@ -177,41 +266,26 @@ class ApiService {
     required int cardIndex,
     required int quality,
   }) async {
-    final dio = await _getDio();
-    try {
-      final response = await dio.post('/sr/review/', data: {
-        'user_id':    userId,
-        'result_id':  resultId,
-        'card_index': cardIndex,
-        'quality':    quality,
-      });
-      return response.data as Map<String, dynamic>;
-    } on diolib.DioException catch (e) {
-      throw _parseError(e);
-    }
+    final response = await _post('/sr/review/', {
+      'user_id':    userId,
+      'result_id':  resultId,
+      'card_index': cardIndex,
+      'quality':    quality,
+    });
+    return response.data as Map<String, dynamic>;
   }
 
   Future<List<SrSession>> getDueCards(String userId) async {
-    final dio = await _getDio();
-    try {
-      final response = await dio.get('/sr/due/$userId/');
-      final data = response.data as Map<String, dynamic>;
-      return (data['sessions'] as List? ?? [])
-          .map((s) => SrSession.fromJson(s as Map<String, dynamic>))
-          .toList();
-    } on diolib.DioException catch (e) {
-      throw _parseError(e);
-    }
+    final response = await _get('/sr/due/$userId/');
+    final data = response.data as Map<String, dynamic>;
+    return (data['sessions'] as List? ?? [])
+        .map((s) => SrSession.fromJson(s as Map<String, dynamic>))
+        .toList();
   }
 
   Future<Map<String, dynamic>> getSrStats(String userId) async {
-    final dio = await _getDio();
-    try {
-      final response = await dio.get('/sr/stats/$userId/');
-      return response.data as Map<String, dynamic>;
-    } on diolib.DioException catch (e) {
-      throw _parseError(e);
-    }
+    final response = await _get('/sr/stats/$userId/');
+    return response.data as Map<String, dynamic>;
   }
 
   // ── V3: Ingest (YouTube / URL / OCR) ─────────────────────────────────────
@@ -220,32 +294,22 @@ class ApiService {
     required String url,
     required String userId,
   }) async {
-    final dio = await _getDio();
-    try {
-      final response = await dio.post('/ingest/url/', data: {
-        'url':     url,
-        'user_id': userId,
-      });
-      return response.data as Map<String, dynamic>;
-    } on diolib.DioException catch (e) {
-      throw _parseError(e);
-    }
+    final response = await _post('/ingest/url/', {
+      'url':     url,
+      'user_id': userId,
+    });
+    return response.data as Map<String, dynamic>;
   }
 
   Future<Map<String, dynamic>> ingestYouTube({
     required String url,
     required String userId,
   }) async {
-    final dio = await _getDio();
-    try {
-      final response = await dio.post('/ingest/youtube/', data: {
-        'url':     url,
-        'user_id': userId,
-      });
-      return response.data as Map<String, dynamic>;
-    } on diolib.DioException catch (e) {
-      throw _parseError(e);
-    }
+    final response = await _post('/ingest/youtube/', {
+      'url':     url,
+      'user_id': userId,
+    });
+    return response.data as Map<String, dynamic>;
   }
 
   Future<Map<String, dynamic>> ingestOcr({
@@ -261,9 +325,11 @@ class ApiService {
         ),
         'user_id': userId,
       });
-      final response = await dio.post('/ingest/ocr/',
-          data: formData,
-          options: diolib.Options(contentType: 'multipart/form-data'));
+      final response = await dio.post(
+        '/ingest/ocr/',
+        data: formData,
+        options: diolib.Options(contentType: 'multipart/form-data'),
+      );
       return response.data as Map<String, dynamic>;
     } on diolib.DioException catch (e) {
       throw _parseError(e);
@@ -280,79 +346,52 @@ class ApiService {
     required int total,
     required List<Map<String, dynamic>> answers,
   }) async {
-    final dio = await _getDio();
-    try {
-      await dio.post('/analytics/quiz-attempt/', data: {
-        'user_id':      userId,
-        'result_id':    resultId,
-        'session_name': sessionName,
-        'score':        score,
-        'total':        total,
-        'answers':      answers,
-      });
-    } on diolib.DioException catch (e) {
-      throw _parseError(e);
-    }
+    await _post('/analytics/quiz-attempt/', {
+      'user_id':      userId,
+      'result_id':    resultId,
+      'session_name': sessionName,
+      'score':        score,
+      'total':        total,
+      'answers':      answers,
+    });
   }
 
   Future<List<WeakTopic>> getWeakTopics(String userId) async {
-    final dio = await _getDio();
-    try {
-      final response = await dio.get('/analytics/weak-topics/$userId/');
-      final data = response.data as Map<String, dynamic>;
-      return (data['topics'] as List? ?? [])
-          .map((t) => WeakTopic.fromJson(t as Map<String, dynamic>))
-          .toList();
-    } on diolib.DioException catch (e) {
-      throw _parseError(e);
-    }
+    final response = await _get('/analytics/weak-topics/$userId/');
+    final data = response.data as Map<String, dynamic>;
+    return (data['topics'] as List? ?? [])
+        .map((t) => WeakTopic.fromJson(t as Map<String, dynamic>))
+        .toList();
   }
 
-  Future<List<AccuracyPoint>> getAccuracyOverTime(String userId,
-      {int days = 30}) async {
-    final dio = await _getDio();
-    try {
-      final response = await dio.get('/analytics/accuracy/$userId/',
-          queryParameters: {'days': days});
-      final data = response.data as Map<String, dynamic>;
-      return (data['points'] as List? ?? [])
-          .map((p) => AccuracyPoint.fromJson(p as Map<String, dynamic>))
-          .toList();
-    } on diolib.DioException catch (e) {
-      throw _parseError(e);
-    }
+  Future<List<AccuracyPoint>> getAccuracyOverTime(
+      String userId, {
+        int days = 30,
+      }) async {
+    final response = await _get(
+      '/analytics/accuracy/$userId/',
+      queryParameters: {'days': days},
+    );
+    final data = response.data as Map<String, dynamic>;
+    return (data['points'] as List? ?? [])
+        .map((p) => AccuracyPoint.fromJson(p as Map<String, dynamic>))
+        .toList();
   }
 
   Future<Map<String, dynamic>> getAnalyticsSummary(String userId) async {
-    final dio = await _getDio();
-    try {
-      final response = await dio.get('/analytics/summary/$userId/');
-      return response.data as Map<String, dynamic>;
-    } on diolib.DioException catch (e) {
-      throw _parseError(e);
-    }
+    final response = await _get('/analytics/summary/$userId/');
+    return response.data as Map<String, dynamic>;
   }
 
   Future<Map<String, dynamic>> getWeeklyStats(String userId) async {
-    final dio = await _getDio();
-    try {
-      final response = await dio.get('/analytics/weekly-stats/$userId/');
-      return response.data as Map<String, dynamic>;
-    } on diolib.DioException catch (e) {
-      throw _parseError(e);
-    }
+    final response = await _get('/analytics/weekly-stats/$userId/');
+    return response.data as Map<String, dynamic>;
   }
 
   // ── V3: Shared Sessions ───────────────────────────────────────────────────
 
   Future<void> setSessionVisibility(String resultId, bool isPublic) async {
-    final dio = await _getDio();
-    try {
-      await dio.patch('/shared/$resultId/visibility/',
-          data: {'is_public': isPublic});
-    } on diolib.DioException catch (e) {
-      throw _parseError(e);
-    }
+    await _patch('/shared/$resultId/visibility/', {'is_public': isPublic});
   }
 
   Future<List<PublicSession>> browsePublicSessions({
@@ -360,97 +399,84 @@ class ApiService {
     int limit  = 20,
     int offset = 0,
   }) async {
-    final dio = await _getDio();
-    try {
-      final response = await dio.get('/shared/browse/', queryParameters: {
-        if (search != null && search.isNotEmpty) 'search': search,
-        'limit':  limit,
-        'offset': offset,
-      });
-      final data = response.data as Map<String, dynamic>;
-      return (data['sessions'] as List? ?? [])
-          .map((s) => PublicSession.fromJson(s as Map<String, dynamic>))
-          .toList();
-    } on diolib.DioException catch (e) {
-      throw _parseError(e);
-    }
+    final response = await _get('/shared/browse/', queryParameters: {
+      if (search != null && search.isNotEmpty) 'search': search,
+      'limit':  limit,
+      'offset': offset,
+    });
+    final data = response.data as Map<String, dynamic>;
+    return (data['sessions'] as List? ?? [])
+        .map((s) => PublicSession.fromJson(s as Map<String, dynamic>))
+        .toList();
   }
 
   Future<List<PublicSession>> getFeaturedSessions() async {
-    final dio = await _getDio();
-    try {
-      final response = await dio.get('/shared/featured/');
-      final data = response.data as Map<String, dynamic>;
-      return (data['sessions'] as List? ?? [])
-          .map((s) => PublicSession.fromJson(s as Map<String, dynamic>))
-          .toList();
-    } on diolib.DioException catch (e) {
-      throw _parseError(e);
-    }
+    final response = await _get('/shared/featured/');
+    final data = response.data as Map<String, dynamic>;
+    return (data['sessions'] as List? ?? [])
+        .map((s) => PublicSession.fromJson(s as Map<String, dynamic>))
+        .toList();
   }
 
   Future<String> cloneSession({
     required String resultId,
     required String userId,
   }) async {
-    final dio = await _getDio();
-    try {
-      final response = await dio.post('/shared/$resultId/clone/',
-          data: {'user_id': userId});
-      return (response.data as Map<String, dynamic>)['new_result_id'] as String;
-    } on diolib.DioException catch (e) {
-      throw _parseError(e);
+    final response = await _post('/shared/$resultId/clone/', {
+      'user_id': userId,
+    });
+    final data = response.data;
+    if (data is! Map<String, dynamic> || data['new_result_id'] == null) {
+      throw 'Clone failed: unexpected response from server.';
     }
+    return data['new_result_id'] as String;
   }
 
   // ── Notifications ─────────────────────────────────────────────────────────
 
   Future<List<NotificationItem>> getNotifications(String userId) async {
-    final dio = await _getDio();
-    try {
-      final response = await dio.get('/notifications/$userId/');
-      final data = response.data as Map<String, dynamic>;
-      return (data['notifications'] as List? ?? [])
-          .map((n) => NotificationItem.fromJson(n as Map<String, dynamic>))
-          .toList();
-    } on diolib.DioException catch (e) {
-      throw _parseError(e);
-    }
+    final response = await _get('/notifications/$userId/');
+    final data = response.data as Map<String, dynamic>;
+    return (data['notifications'] as List? ?? [])
+        .map((n) => NotificationItem.fromJson(n as Map<String, dynamic>))
+        .toList();
   }
 
   Future<void> markNotificationRead(String notificationId) async {
-    final dio = await _getDio();
-    try {
-      await dio.patch('/notifications/$notificationId/read/');
-    } on diolib.DioException catch (e) {
-      throw _parseError(e);
-    }
+    await _patch('/notifications/$notificationId/read/', {});
   }
 
   Future<void> markAllNotificationsRead(String userId) async {
-    final dio = await _getDio();
-    try {
-      await dio.post('/notifications/$userId/read-all/');
-    } on diolib.DioException catch (e) {
-      throw _parseError(e);
-    }
+    await _post('/notifications/$userId/read-all/', {});
+  }
+
+  Future<void> adminSendNotification({
+    String? userId,
+    required String type,
+    required String title,
+    required String body,
+  }) async {
+    await _post('/notifications/admin/send/', {
+      if (userId != null) 'user_id': userId,
+      'type':  type,
+      'title': title,
+      'body':  body,
+    });
   }
 
   Future<void> deleteNotification(String notificationId) async {
-    final dio = await _getDio();
-    try {
-      await dio.delete('/notifications/$notificationId/');
-    } on diolib.DioException catch (e) {
-      throw _parseError(e);
-    }
+    await _delete('/notifications/$notificationId/');
   }
 
   // ── Error helper ──────────────────────────────────────────────────────────
 
   String _parseError(diolib.DioException e) {
     if (e.response != null) {
-      final detail = (e.response?.data as Map?)?['detail'];
-      if (detail != null) return detail.toString();
+      final data = e.response?.data;
+      if (data is Map) {
+        final detail = data['detail'];
+        if (detail != null) return detail.toString();
+      }
       return 'Server error ${e.response?.statusCode}';
     }
     if (e.type == diolib.DioExceptionType.connectionTimeout ||

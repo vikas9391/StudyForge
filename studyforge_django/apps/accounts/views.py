@@ -2,6 +2,10 @@
 apps/accounts/views.py
 Auth (signup/signin/signout) + Profile + Admin endpoints.
 Mirrors the FastAPI routers/auth.py and routers/profile.py exactly.
+
+CHANGES:
+  - ProfileView.get: auto-syncs is_staff/is_superuser → Profile.is_admin on get_or_create
+  - _assert_admin: falls back to user.is_staff / user.is_superuser if profile missing
 """
 
 from rest_framework import status
@@ -63,8 +67,8 @@ class SigninView(APIView):
 
 
 class SignoutView(APIView):
-    permission_classes = [AllowAny]  
-    
+    permission_classes = [AllowAny]
+
     def post(self, request):
         """POST /auth/signout/ — blacklist refresh token (client deletes access token)."""
         try:
@@ -90,9 +94,20 @@ class ProfileView(APIView):
     permission_classes = [IsAuthenticated]
 
     def get(self, request, user_id):
-        """GET /profile/{user_id}/ — fetch profile."""
+        """GET /profile/{user_id}/ — fetch profile.
+
+        Also syncs Django's is_staff / is_superuser → Profile.is_admin
+        so that superusers created via createsuperuser automatically get
+        admin access without needing a manual DB patch.
+        """
         user = get_object_or_404(User, id=user_id)
         profile, _ = Profile.objects.get_or_create(user=user)
+
+        # ── Auto-sync Django superuser/staff → Profile.is_admin ──────────────
+        if (user.is_staff or user.is_superuser) and not profile.is_admin:
+            profile.is_admin = True
+            profile.save(update_fields=["is_admin"])
+
         return Response(ProfileSerializer(profile).data)
 
     def put(self, request, user_id):
@@ -129,9 +144,16 @@ class StudyHistoryView(APIView):
 # ── Admin ──────────────────────────────────────────────────────────────────────
 
 def _assert_admin(user):
+    """Raise PermissionDenied if the user is not an admin.
+
+    Falls back to Django's own is_staff / is_superuser flags so that
+    superusers created via createsuperuser always have access even before
+    their Profile row has been synced.
+    """
     from rest_framework.exceptions import PermissionDenied
-    profile = getattr(user, "profile", None)
-    if not profile or not profile.is_admin:
+    profile  = getattr(user, "profile", None)
+    is_admin = (profile and profile.is_admin) or user.is_staff or user.is_superuser
+    if not is_admin:
         raise PermissionDenied("Admin access required.")
 
 
@@ -141,7 +163,7 @@ class AdminStatsView(APIView):
     def get(self, request):
         """GET /admin/stats/ — platform-wide stats."""
         _assert_admin(request.user)
-        cutoff = timezone.now() - timedelta(hours=24)
+        cutoff       = timezone.now() - timedelta(hours=24)
         recent_users = Profile.objects.order_by("-created_at")[:5]
 
         return Response({
@@ -166,8 +188,8 @@ class AdminUsersView(APIView):
     def get(self, request):
         """GET /admin/users/ — paginated user list."""
         _assert_admin(request.user)
-        page  = int(request.query_params.get("page", 1))
-        limit = int(request.query_params.get("limit", 20))
+        page   = int(request.query_params.get("page", 1))
+        limit  = int(request.query_params.get("limit", 20))
         offset = (page - 1) * limit
 
         profiles = Profile.objects.select_related("user").order_by("-created_at")[offset:offset + limit]
@@ -177,7 +199,7 @@ class AdminUsersView(APIView):
                 "id":            str(p.user.id),
                 "email":         p.user.email,
                 "full_name":     p.full_name,
-                "is_admin":      p.is_admin,
+                "is_admin":      p.is_admin or p.user.is_staff or p.user.is_superuser,
                 "session_count": Result.objects.filter(user=p.user).count(),
                 "created_at":    p.created_at.isoformat(),
             })
@@ -196,10 +218,10 @@ class AdminUserDetailView(APIView):
     def get(self, request, target_user_id):
         """GET /admin/users/{id}/ — full profile + sessions."""
         _assert_admin(request.user)
-        user = get_object_or_404(User, id=target_user_id)
-        profile, _ = Profile.objects.get_or_create(user=user)
-        sessions = Result.objects.filter(user=user).order_by("-created_at") \
-                         .values("id", "file_url", "summary", "created_at")
+        user            = get_object_or_404(User, id=target_user_id)
+        profile, _      = Profile.objects.get_or_create(user=user)
+        sessions        = Result.objects.filter(user=user).order_by("-created_at") \
+                                .values("id", "file_url", "summary", "created_at")
         return Response({
             "profile":  ProfileSerializer(profile).data,
             "sessions": list(sessions),
@@ -223,8 +245,8 @@ class AdminToggleAdminView(APIView):
     def put(self, request, target_user_id):
         """PUT /admin/users/{id}/toggle-admin/ — promote/demote admin."""
         _assert_admin(request.user)
-        user = get_object_or_404(User, id=target_user_id)
-        profile, _ = Profile.objects.get_or_create(user=user)
+        user            = get_object_or_404(User, id=target_user_id)
+        profile, _      = Profile.objects.get_or_create(user=user)
         profile.is_admin = not profile.is_admin
         profile.save()
         action = "promoted to" if profile.is_admin else "removed from"

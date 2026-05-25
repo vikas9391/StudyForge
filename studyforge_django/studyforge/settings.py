@@ -13,7 +13,7 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 # ── Security ───────────────────────────────────────────────────────────────────
 SECRET_KEY = config("SECRET_KEY", default="django-insecure-change-me")
 DEBUG = config("DEBUG", default=True, cast=bool)
-ALLOWED_HOSTS = config("ALLOWED_HOSTS", default="*").split(",")
+ALLOWED_HOSTS = config("ALLOWED_HOSTS", default="*", cast=lambda v: v.split(","))
 
 # ── Apps ───────────────────────────────────────────────────────────────────────
 INSTALLED_APPS = [
@@ -75,8 +75,8 @@ WSGI_APPLICATION = "studyforge.wsgi.application"
 # DATABASE_URL=postgresql://user:pass@ep-xxx.us-east-2.aws.neon.tech/neondb?sslmode=require
 DATABASES = {
     "default": dj_database_url.parse(
-        config("DATABASE_URL", cast=str),
-        conn_max_age=0,
+        str(config("DATABASE_URL", cast=str)),
+        conn_max_age=600,
         conn_health_checks=True,
     )
 }
@@ -113,7 +113,7 @@ CORS_ALLOW_ALL_ORIGINS = True   # narrow this in production
 
 # ── File Storage ───────────────────────────────────────────────────────────────
 MEDIA_URL  = "/media/"
-MEDIA_ROOT = BASE_DIR / config("MEDIA_ROOT", default="media")
+MEDIA_ROOT = BASE_DIR / str(config("MEDIA_ROOT", default="media"))
 
 # ── Hugging Face ───────────────────────────────────────────────────────────────
 HF_API_TOKEN = config("HF_API_TOKEN", default="")

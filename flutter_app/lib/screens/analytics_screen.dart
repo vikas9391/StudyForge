@@ -308,6 +308,23 @@ class _AnalyticsScreenState extends State<AnalyticsScreen> {
   // ── Accuracy chart ─────────────────────────────────────────────────────────
 
   Widget _buildAccuracyChart() {
+    // Build a 30-day slot map: date string → pct (or null if no data)
+    final now = DateTime.now();
+    final slots = List.generate(30, (i) {
+      final d = now.subtract(Duration(days: 29 - i));
+      final key =
+          '${d.year}-${d.month.toString().padLeft(2, '0')}-${d.day.toString().padLeft(2, '0')}';
+      return key;
+    });
+
+    // Map accuracy data by date
+    final dataMap = <String, int>{};
+    for (final p in _accuracy) {
+      // p.date may be "2025-05-24" or "2025-05-24T..." — normalize to date only
+      final dateOnly = p.date.length >= 10 ? p.date.substring(0, 10) : p.date;
+      dataMap[dateOnly] = p.pct;
+    }
+
     return Padding(
       padding: const EdgeInsets.fromLTRB(14, 14, 14, 0),
       child: Container(
@@ -329,8 +346,8 @@ class _AnalyticsScreenState extends State<AnalyticsScreen> {
                         fontWeight: FontWeight.w700,
                         color: AppColors.textPrimary)),
                 Container(
-                  padding:
-                  const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                  padding: const EdgeInsets.symmetric(
+                      horizontal: 10, vertical: 4),
                   decoration: BoxDecoration(
                     color: AppColors.primaryGlow,
                     borderRadius: BorderRadius.circular(20),
@@ -360,46 +377,48 @@ class _AnalyticsScreenState extends State<AnalyticsScreen> {
                 height: 120,
                 child: Row(
                   crossAxisAlignment: CrossAxisAlignment.end,
-                  children: _accuracy.map((point) {
-                    final maxPct = _accuracy.fold<int>(
-                        0, (m, p) => p.pct > m ? p.pct : m);
-                    final frac =
-                    maxPct > 0 ? point.pct / maxPct : 0.0;
-                    final color = point.pct >= 70
+                  children: slots.map((dateKey) {
+                    final pct    = dataMap[dateKey]; // null = no data that day
+                    final haData = pct != null;
+                    final frac   = haData ? pct / 100.0 : 0.0;
+
+                    final color = !haData
+                        ? Colors.transparent
+                        : pct >= 70
                         ? AppColors.accentGreen
-                        : point.pct >= 40
+                        : pct >= 40
                         ? AppColors.accentAmber
                         : AppColors.accentRed;
+
                     return Expanded(
                       child: Padding(
-                        padding: const EdgeInsets.symmetric(horizontal: 2),
+                        padding: const EdgeInsets.symmetric(horizontal: 1.5),
                         child: Column(
                           mainAxisAlignment: MainAxisAlignment.end,
                           children: [
-                            Text('${point.pct}%',
-                                style: TextStyle(
-                                    fontSize: 8,
-                                    color: color,
-                                    fontWeight: FontWeight.w600)),
-                            const SizedBox(height: 2),
                             AnimatedContainer(
                               duration: Duration(
                                   milliseconds: 400 +
-                                      _accuracy.indexOf(point) * 30),
+                                      slots.indexOf(dateKey) * 10),
                               curve: Curves.easeOut,
-                              // BUG FIX: was 100, reduced to 90 to stay within 120px container
-                              height: 90 * frac,
+                              height: haData
+                                  ? (70 * frac).clamp(4.0, 70.0)
+                                  : 3.0,
                               decoration: BoxDecoration(
-                                color: color,
+                                color: haData
+                                    ? color
+                                    : AppColors.border.withOpacity(0.4),
                                 borderRadius: const BorderRadius.vertical(
-                                    top: Radius.circular(4)),
+                                    top: Radius.circular(3)),
                               ),
                             ),
                             const SizedBox(height: 4),
                             Text(
-                              point.date.substring(5),
+                              dateKey == slots.first || dateKey == slots.last
+                                  ? dateKey.substring(5)
+                                  : '',
                               style: TextStyle(
-                                  fontSize: 7,
+                                  fontSize: 6,
                                   color: AppColors.textSecond),
                             ),
                           ],

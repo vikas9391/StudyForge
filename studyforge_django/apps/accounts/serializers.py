@@ -13,7 +13,7 @@ class SignupSerializer(serializers.Serializer):
 
     def create(self, validated_data):
         email = validated_data["email"]
-        user = User.objects.create_user(
+        user  = User.objects.create_user(
             username=email,
             email=email,
             password=validated_data["password"],
@@ -22,16 +22,33 @@ class SignupSerializer(serializers.Serializer):
 
 
 class ProfileSerializer(serializers.ModelSerializer):
-    email      = serializers.EmailField(source="user.email", read_only=True)
-    user_id    = serializers.UUIDField(source="user.id", read_only=True)
+    email      = serializers.EmailField(source="user.email",  read_only=True)
+    user_id    = serializers.UUIDField(source="user.id",      read_only=True)
     created_at = serializers.DateTimeField(read_only=True)
     updated_at = serializers.DateTimeField(read_only=True)
 
+    # Expose the effective admin status: Profile.is_admin OR Django staff/superuser.
+    # This means createsuperuser accounts always come back as is_admin=true
+    # without needing a manual DB patch.
+    is_admin = serializers.SerializerMethodField()
+
     class Meta:
         model  = Profile
-        fields = ["user_id", "email", "full_name", "phone", "bio", "avatar_url",
-                  "is_admin", "created_at", "updated_at"]
-        read_only_fields = ["user_id", "email", "is_admin", "created_at", "updated_at"]
+        fields = [
+            "user_id", "email", "full_name", "phone", "bio", "avatar_url",
+            "is_admin", "created_at", "updated_at",
+        ]
+        read_only_fields = [
+            "user_id", "email", "is_admin", "created_at", "updated_at",
+        ]
+
+    def get_is_admin(self, obj) -> bool:
+        """True if Profile.is_admin OR the underlying User is staff/superuser."""
+        return bool(
+            obj.is_admin
+            or obj.user.is_staff
+            or obj.user.is_superuser
+        )
 
 
 class ProfileUpdateSerializer(serializers.ModelSerializer):

@@ -10,6 +10,8 @@ import 'screens/login_screen.dart';
 import 'screens/home_screen.dart';
 import 'services/auth_service.dart';
 import 'widgets/sf_logo.dart';
+import '../services/home_cache.dart';
+
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -27,16 +29,19 @@ void main() async {
   // Load .env
   await dotenv.load(fileName: '.env');
 
-  // Load cached userId + email into AuthService sync getters.
+  // Load cached userId + email into AuthService sync getters,
+  // then proactively refresh the access token so it's ready before
+  // HomeScreen._loadData() fires. If the refresh token is also expired,
+  // clearTokens() is called inside init() so the user lands on LoginScreen.
   await AuthService.init();
 
   runApp(const StudyforgeApp());
 }
 
-// ── App root ──────────────────────────────────────────────────────────────────
-// ── App root ──────────────────────────────────────────────────────────────────
+// ── Navigator key — used for programmatic navigation outside widget tree ───────
+final navigatorKey = GlobalKey<NavigatorState>();
 
-final navigatorKey = GlobalKey<NavigatorState>();  // ← move here, top-level
+// ── App root ──────────────────────────────────────────────────────────────────
 
 class StudyforgeApp extends StatelessWidget {
   const StudyforgeApp({super.key});
@@ -44,7 +49,7 @@ class StudyforgeApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      navigatorKey:               navigatorKey,   // ← add this
+      navigatorKey:               navigatorKey,
       title:                      'Studyforge',
       debugShowCheckedModeBanner: false,
       theme:                      buildAppTheme(),
@@ -55,9 +60,12 @@ class StudyforgeApp extends StatelessWidget {
 
 // ── Auth gate — rebuilds whenever login / logout changes ──────────────────────
 //
-// LoginScreen calls Navigator.pushReplacement → AuthGate (after sign-in).
-// HomeScreen calls AuthService.signOut() → Navigator.pushReplacement → AuthGate.
-// Both paths trigger a fresh FutureBuilder check.
+// After AuthService.init() runs in main(), isLoggedIn() reflects the
+// post-refresh state: if both tokens were expired, clearTokens() will have
+// wiped the access_token, so isLoggedIn() returns false → LoginScreen.
+//
+// Sign-in path:  LoginScreen calls onSignIn → _AuthGateState re-checks isLoggedIn()
+// Sign-out path: HomeScreen calls onSignOut → _AuthGateState forces false directly
 
 class AuthGate extends StatefulWidget {
   const AuthGate({super.key});
@@ -73,8 +81,10 @@ class _AuthGateState extends State<AuthGate> {
   void initState() {
     super.initState();
     _loginFuture = AuthService.isLoggedIn();
+    AuthService.onSessionChanged = () {
+      HomeCache.instance.invalidate();
+    };
   }
-
   @override
   Widget build(BuildContext context) {
     return FutureBuilder<bool>(
@@ -97,14 +107,18 @@ class _AuthGateState extends State<AuthGate> {
       _loginFuture = AuthService.isLoggedIn();
     });
   }
+
   void _onSignOut() {
     setState(() {
+      // Force immediately to LoginScreen without re-checking prefs,
+      // since AuthService.signOut() already cleared all tokens.
       _loginFuture = Future.value(false);
     });
   }
 }
 
 // ── Splash screen ─────────────────────────────────────────────────────────────
+
 class SplashScreen extends StatelessWidget {
   const SplashScreen({super.key});
 
