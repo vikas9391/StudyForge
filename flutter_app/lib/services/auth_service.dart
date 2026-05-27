@@ -1,44 +1,14 @@
-// lib/services/auth_service.dart
-// Full drop-in replacement for the Supabase-based AuthService.
-// Matches every method and getter the screens call:
-//   AuthService.userId        — sync getter (cached from SharedPreferences)
-//   AuthService.userEmail     — sync getter (cached from SharedPreferences)
-//   AuthService.signIn()      — POST /auth/signin/
-//   AuthService.signUp()      — POST /auth/signup/
-//   AuthService.signOut()     — POST /auth/signout/
-//   AuthService.signInWithGoogle() — not supported, returns clear error
-//   AuthService.resetPassword()    — POST /auth/reset-password/
-//   AuthService.isLoggedIn()  — async check
-//   AuthService.getUserId()   — async read from SharedPreferences
-//   AuthService.getAccessToken()   — async read from SharedPreferences
-//   AuthService.refreshAccessToken() — POST /auth/refresh/
-//   AuthService.authorizedGet()    — GET with auto token refresh
-//   AuthService.authorizedPost()   — POST with auto token refresh
-//
-// CHANGES FROM ORIGINAL:
-//   1. Added onSessionChanged callback — fired on every _saveTokens()
-//      and clearTokens() call so the cache layer can invalidate itself
-//      without a circular import.
-//   2. No other logic changed.
-
 import 'dart:async';
 import 'dart:convert';
 import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:google_sign_in/google_sign_in.dart';
 
 class AuthService {
   static String get _base =>
       dotenv.env['API_BASE_URL'] ?? 'http://10.0.2.2:8000';
 
-  // ── Session-change hook ───────────────────────────────────────────────────
-  // Wire this up in main.dart (or AuthGate.initState) to invalidate the
-  // HomeCache whenever the signed-in user changes:
-  //
-  //   AuthService.onSessionChanged = () => HomeCache.instance.invalidate();
-  //
-  // Keeping it as a plain callback (not an import) avoids a circular
-  // dependency between auth_service ↔ home_cache.
   static VoidCallback? onSessionChanged;
 
   // ── In-memory cache so screens can call userId/userEmail synchronously ────
@@ -295,12 +265,55 @@ class AuthService {
 
   // ── Google Sign-In ────────────────────────────────────────────────────────
 
+// inside AuthService class:
+
+  static final _googleSignIn = GoogleSignIn(
+    clientId: dotenv.env['GOOGLE_CLIENT_ID'],
+    scopes: ['email', 'profile'],
+  );
+
   static Future<Map<String, dynamic>> signInWithGoogle() async {
-    return {
-      'success': false,
-      'error':   'Google Sign-In is not available in this version. '
-          'Please use email and password.',
-    };
+    try {
+      // Trigger Google account picker
+      final googleUser = await _googleSignIn.signIn();
+      if (googleUser == null) {
+        return {'success': false, 'error': 'Sign-in cancelled.'};
+      }
+
+      // Get id_token from Google
+      final googleAuth = await googleUser.authentication;
+      final idToken    = googleAuth.idToken;
+
+      if (idToken == null) {
+        return {'success': false, 'error': 'Failed to get Google token.'};
+      }
+
+      // Send to Django for verification
+      final resp = await http.post(
+        Uri.parse('$_base/auth/google/'),
+        headers: {'Content-Type': 'application/json'},
+        body: jsonEncode({'id_token': idToken}),
+      );
+
+      final data = jsonDecode(resp.body) as Map<String, dynamic>;
+
+      if (resp.statusCode == 200) {
+        await _saveTokens(
+          access:  data['access_token']  ?? '',
+          refresh: data['refresh_token'] ?? '',
+          userId:  data['user_id'].toString(),
+          email:   data['email']         ?? googleUser.email,
+        );
+        return {'success': true};
+      }
+
+      return {
+        'success': false,
+        'error': data['detail'] ?? 'Google sign-in failed.'
+      };
+    } catch (e) {
+      return {'success': false, 'error': 'Google sign-in error: $e'};
+    }
   }
 
   // ── Password Reset ────────────────────────────────────────────────────────

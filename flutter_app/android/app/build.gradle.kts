@@ -20,7 +20,7 @@ android {
 
     defaultConfig {
         applicationId = "com.studyforge.app"
-        minSdk = 21          // Google Sign-In requires minimum 21
+        minSdk = flutter.minSdkVersion          // Google Sign-In requires minimum 21
         targetSdk = flutter.targetSdkVersion
         versionCode = flutter.versionCode
         versionName = flutter.versionName

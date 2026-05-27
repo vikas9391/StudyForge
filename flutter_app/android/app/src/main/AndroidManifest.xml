@@ -26,19 +26,18 @@
                 android:name="io.flutter.embedding.android.NormalTheme"
                 android:resource="@style/NormalTheme"/>
 
+            <!-- App launcher -->
             <intent-filter>
                 <action android:name="android.intent.action.MAIN"/>
                 <category android:name="android.intent.category.LAUNCHER"/>
             </intent-filter>
 
-            <!-- Supabase deep-link callback (password reset + OAuth) -->
-            <intent-filter android:autoVerify="true">
+            <!-- Studyforge deep link — password reset -->
+            <intent-filter>
                 <action android:name="android.intent.action.VIEW"/>
                 <category android:name="android.intent.category.DEFAULT"/>
                 <category android:name="android.intent.category.BROWSABLE"/>
-                <data
-                    android:scheme="io.studyforge"
-                    android:host="login-callback"/>
+                <data android:scheme="studyforge" android:host="reset-password"/>
             </intent-filter>
 
         </activity>
@@ -47,10 +46,9 @@
             android:name="flutterEmbedding"
             android:value="2"/>
 
-        <!-- Google Sign-In -->
         <meta-data
-            android:name="com.google.android.gms.ads.APPLICATION_ID"
-            android:value="YOUR_GOOGLE_APP_ID"/>
+            android:name="io.flutter.embedding.android.EnableImpeller"
+            android:value="false" />x
 
     </application>
 </manifest>

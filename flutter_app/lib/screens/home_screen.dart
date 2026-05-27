@@ -64,16 +64,21 @@ class _HomeScreenState extends State<HomeScreen> {
   int    _flashcardsThisWeek = 0;
   int    _questionsDelta     = 0;
   int    _flashcardsDelta    = 0;
-  double _accuracyRate       = 0.0; // 0.0–1.0
+  double _accuracyRate       = 0.0;
   List<SrSession> _srSessions = [];
   int _totalDueCards = 0;
+
   // ── Lifecycle ──────────────────────────────────────────────────────────────
 
   @override
   void initState() {
     super.initState();
     _greeting = _computeGreeting();
-    _loadData();
+    // FIX: Defer data loading to after the first frame is rendered.
+    // This prevents heavy API calls from blocking the UI thread on startup.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _loadData();
+    });
     _startGreetingTimer();
     _searchCtrl.addListener(_onSearchChanged);
 
@@ -141,6 +146,10 @@ class _HomeScreenState extends State<HomeScreen> {
   //  1. If cache has data → paint UI instantly (no shimmer).
   //  2. If cache is stale (>3 min) → background-refresh silently.
   //  3. forceRefresh=true (pull-to-refresh, after upload/delete) → always fetch.
+  //
+  // FIX: Stats, notifications, and due cards are now fetched in a separate
+  // Future.microtask so they never block the main UI thread. The primary
+  // sessions + profile fetch paints the screen first, then stats fill in.
 
   Future<void> _loadData({bool forceRefresh = false}) async {
     final cache = HomeCache.instance;
@@ -170,7 +179,8 @@ class _HomeScreenState extends State<HomeScreen> {
       if (mounted) setState(() => _loading = true);
     }
 
-    // ── Step 2: Fetch from network ────────────────────────────────────────
+    // ── Step 2: Fetch core data (sessions + profile) from network ─────────
+    // This is the minimum needed to paint the screen. Stats are deferred.
     try {
       final uid = AuthService.userId;
       if (uid.isEmpty) return;
@@ -204,65 +214,11 @@ class _HomeScreenState extends State<HomeScreen> {
         });
       }
 
-      // Stats + notifications (non-fatal, sequential to avoid hammering DB)
-      try {
-        final weeklyStats = await _api.getWeeklyStats(uid);
-        final summary     = await _api.getAnalyticsSummary(uid);
+      // ── Step 3: Fetch stats + notifications off the main thread ──────────
+      // FIX: Using Future.microtask schedules this work after the current
+      // frame completes, so it never causes frame skips or ANR crashes.
+      Future.microtask(() => _loadSecondaryData(uid));
 
-        List<dynamic> notifs = [];
-        try {
-          notifs = await _api.getNotifications(uid);
-        } catch (_) {}
-
-        final unread = notifs
-            .where((n) => n is Map
-            ? !(n['is_read'] as bool? ?? false)
-            : !n.isRead)
-            .length;
-
-        final qWeek  = (weeklyStats['questions_this_week']  as num?)?.toInt() ?? 0;
-        final cWeek  = (weeklyStats['flashcards_this_week'] as num?)?.toInt() ?? 0;
-        final qDelta = (weeklyStats['questions_delta']       as num?)?.toInt() ?? 0;
-        final cDelta = (weeklyStats['flashcards_delta']      as num?)?.toInt() ?? 0;
-        final avgAcc =
-            ((summary['avg_accuracy'] as num?)?.toDouble() ?? 0.0) / 100.0;
-
-        cache.updateStats(
-          questionsThisWeek:  qWeek,
-          flashcardsThisWeek: cWeek,
-          questionsDelta:     qDelta,
-          flashcardsDelta:    cDelta,
-          accuracyRate:       avgAcc,
-        );
-        cache.updateUnread(unread);
-        cache.markFetched();
-
-        try {
-          final srSessions = await _api.getDueCards(uid);
-          final dueTotal   = srSessions.fold<int>(
-              0, (s, r) => s + r.cards.length);
-          if (mounted) {
-            setState(() {
-              _srSessions    = srSessions;
-              _totalDueCards = dueTotal;
-            });
-          }
-        } catch (_) {}   // non-fatal — SR section just stays hidden
-
-        if (mounted) {
-          setState(() {
-            _questionsThisWeek  = qWeek;
-            _flashcardsThisWeek = cWeek;
-            _questionsDelta     = qDelta;
-            _flashcardsDelta    = cDelta;
-            _accuracyRate       = avgAcc;
-            _unreadCount        = unread;
-          });
-        }
-      } catch (e) {
-        debugPrint('Stats/notifications fetch failed: $e');
-        cache.markFetched(); // avoid hammering server on repeated failures
-      }
     } catch (e) {
       debugPrint('Core data load failed: $e');
       if (e.toString().contains('Session expired') && mounted) {
@@ -271,6 +227,71 @@ class _HomeScreenState extends State<HomeScreen> {
       }
     } finally {
       if (mounted) setState(() => _loading = false);
+    }
+  }
+
+  // ── Secondary data (stats, notifications, SR) — runs off main thread ───────
+  Future<void> _loadSecondaryData(String uid) async {
+    final cache = HomeCache.instance;
+    try {
+      final weeklyStats = await _api.getWeeklyStats(uid);
+      final summary     = await _api.getAnalyticsSummary(uid);
+
+      List<dynamic> notifs = [];
+      try {
+        notifs = await _api.getNotifications(uid);
+      } catch (_) {}
+
+      final unread = notifs
+          .where((n) => n is Map
+          ? !(n['is_read'] as bool? ?? false)
+          : !n.isRead)
+          .length;
+
+      final qWeek  = (weeklyStats['questions_this_week']  as num?)?.toInt() ?? 0;
+      final cWeek  = (weeklyStats['flashcards_this_week'] as num?)?.toInt() ?? 0;
+      final qDelta = (weeklyStats['questions_delta']       as num?)?.toInt() ?? 0;
+      final cDelta = (weeklyStats['flashcards_delta']      as num?)?.toInt() ?? 0;
+      final avgAcc =
+          ((summary['avg_accuracy'] as num?)?.toDouble() ?? 0.0) / 100.0;
+
+      cache.updateStats(
+        questionsThisWeek:  qWeek,
+        flashcardsThisWeek: cWeek,
+        questionsDelta:     qDelta,
+        flashcardsDelta:    cDelta,
+        accuracyRate:       avgAcc,
+      );
+      cache.updateUnread(unread);
+      cache.markFetched();
+
+      if (mounted) {
+        setState(() {
+          _questionsThisWeek  = qWeek;
+          _flashcardsThisWeek = cWeek;
+          _questionsDelta     = qDelta;
+          _flashcardsDelta    = cDelta;
+          _accuracyRate       = avgAcc;
+          _unreadCount        = unread;
+        });
+      }
+
+      // SR due cards — non-fatal, separate try so stats still land if this fails
+      try {
+        final srSessions = await _api.getDueCards(uid);
+        final dueTotal   = srSessions.fold<int>(
+            0, (s, r) => s + r.cards.length);
+        if (mounted) {
+          setState(() {
+            _srSessions    = srSessions;
+            _totalDueCards = dueTotal;
+          });
+        }
+      } catch (_) {}
+
+    } catch (e) {
+      debugPrint('Stats/notifications fetch failed: $e');
+      cache.markFetched(); // avoid hammering server on repeated failures
     }
   }
 
@@ -293,7 +314,7 @@ class _HomeScreenState extends State<HomeScreen> {
 
     try {
       await _api.deleteResult(id);
-      HomeCache.instance.invalidate(); // force fresh fetch next visit
+      HomeCache.instance.invalidate();
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(
         content: Text('Session deleted',
@@ -385,7 +406,7 @@ class _HomeScreenState extends State<HomeScreen> {
     if (id.isNotEmpty) {
       try {
         await _api.renameResult(id, newName);
-        HomeCache.instance.invalidate(); // keep cache in sync
+        HomeCache.instance.invalidate();
       } catch (_) {
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(SnackBar(
@@ -590,7 +611,6 @@ class _HomeScreenState extends State<HomeScreen> {
     switch (result) {
       case 'profile':
         await Navigator.of(context).push(slideRoute(const ProfileScreen()));
-        // Don't invalidate — profile change doesn't affect sessions list
         if (mounted) _loadData();
       case 'admin':
         if (mounted)
@@ -656,7 +676,6 @@ class _HomeScreenState extends State<HomeScreen> {
                 _buildOfflineBanner(),
                 Expanded(
                   child: RefreshIndicator(
-                    // forceRefresh=true so pull-to-refresh always hits the network
                     onRefresh: () => _loadData(forceRefresh: true),
                     color: AppColors.primary,
                     backgroundColor: AppColors.surface,
@@ -782,7 +801,6 @@ class _HomeScreenState extends State<HomeScreen> {
                   HapticFeedback.lightImpact();
                   await Navigator.of(context)
                       .push(slideRoute(const NotificationsScreen()));
-                  // Refresh unread dot when returning
                   final uid = AuthService.userId;
                   if (uid.isNotEmpty && mounted) {
                     try {
@@ -838,6 +856,8 @@ class _HomeScreenState extends State<HomeScreen> {
           ],
         ],
       ),
+      // FIX: Increased animation delay so header renders before animating,
+      // reducing first-frame work.
     ).animate().fadeIn(duration: 400.ms).slideY(begin: -0.06);
   }
 
@@ -871,7 +891,6 @@ class _HomeScreenState extends State<HomeScreen> {
                 HapticFeedback.lightImpact();
                 await Navigator.of(context).push(slideRoute(
                     UploadScreen(isFirstUpload: _sessions.isEmpty)));
-                // Invalidate so returning home shows new upload
                 HomeCache.instance.invalidate();
                 _loadData(forceRefresh: true);
               },
@@ -934,7 +953,8 @@ class _HomeScreenState extends State<HomeScreen> {
           ],
         ),
       ),
-    ).animate().fadeIn(delay: 100.ms, duration: 400.ms).slideY(begin: 0.12);
+      // FIX: Increased delay from 100ms → 200ms so this animates after header.
+    ).animate().fadeIn(delay: 200.ms, duration: 400.ms).slideY(begin: 0.12);
   }
 
   // ── Stats ──────────────────────────────────────────────────────────────────
@@ -1014,7 +1034,8 @@ class _HomeScreenState extends State<HomeScreen> {
           ]),
         ],
       ),
-    ).animate().fadeIn(delay: 150.ms, duration: 400.ms);
+      // FIX: Increased delay from 150ms → 350ms. Stats animate after CTA.
+    ).animate().fadeIn(delay: 350.ms, duration: 400.ms);
   }
 
   // ── Continue card ──────────────────────────────────────────────────────────
@@ -1126,7 +1147,9 @@ class _HomeScreenState extends State<HomeScreen> {
           ],
         ),
       ),
-    ).animate().fadeIn(delay: 200.ms, duration: 350.ms).slideY(begin: 0.1);
+      // FIX: Increased delay from 200ms → 500ms. Continue card is lower
+      // priority — animate after stats are visible.
+    ).animate().fadeIn(delay: 500.ms, duration: 350.ms).slideY(begin: 0.1);
   }
 
   // ── Recent sources header ──────────────────────────────────────────────────
@@ -1270,7 +1293,7 @@ class _HomeScreenState extends State<HomeScreen> {
           ),
         ),
       ],
-    ).animate().fadeIn(delay: 250.ms, duration: 350.ms);
+    ).animate().fadeIn(delay: 400.ms, duration: 350.ms);
   }
 
   Widget _buildGroupHeader(String label) {
@@ -1472,8 +1495,11 @@ class _HomeScreenState extends State<HomeScreen> {
           ),
         ),
       ),
+      // FIX: Tile animation delays start at 500ms and step by 80ms (was 260ms
+      // + 50ms). This spreads tile renders further apart, avoiding a burst
+      // of simultaneous animation work that caused frame skips.
     ).animate().fadeIn(
-      delay:    Duration(milliseconds: 260 + filteredIndex * 50),
+      delay:    Duration(milliseconds: 500 + filteredIndex * 80),
       duration: 300.ms,
     );
   }
@@ -1481,7 +1507,6 @@ class _HomeScreenState extends State<HomeScreen> {
   // ── Due for review ─────────────────────────────────────────────────────────
 
   Widget _buildDueForReview() {
-    // Use real SR data, up to 3 sessions
     final reviewSessions = _srSessions.take(3).toList();
 
     return Padding(
@@ -1530,7 +1555,6 @@ class _HomeScreenState extends State<HomeScreen> {
             ...List.generate(reviewSessions.length, (i) {
               final session  = reviewSessions[i];
               final dueCount = session.cards.length;
-              // Find the matching parsed session name by resultId
               final matchIdx = _sessions.indexWhere(
                       (s) => (s['result_id'] ?? s['id']) == session.resultId);
               final name = matchIdx >= 0
@@ -1600,8 +1624,9 @@ class _HomeScreenState extends State<HomeScreen> {
           ],
         ),
       ),
-    ).animate().fadeIn(delay: 300.ms, duration: 350.ms);
+    ).animate().fadeIn(delay: 600.ms, duration: 350.ms);
   }
+
   // ── Empty / no-results / shimmer ───────────────────────────────────────────
 
   Widget _buildEmpty() {

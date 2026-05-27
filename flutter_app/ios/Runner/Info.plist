@@ -27,7 +27,7 @@
     <key>LSRequiresIPhoneOS</key>
     <true/>
 
-    <!-- Google Sign-In: replace with your REVERSED_CLIENT_ID from GoogleService-Info.plist -->
+    <!-- Studyforge deep link — password reset -->
     <key>CFBundleURLTypes</key>
     <array>
         <dict>
@@ -35,40 +35,31 @@
             <string>Editor</string>
             <key>CFBundleURLSchemes</key>
             <array>
-                <string>com.googleusercontent.apps.YOUR_REVERSED_CLIENT_ID</string>
-            </array>
-        </dict>
-        <!-- Supabase deep-link callback -->
-        <dict>
-            <key>CFBundleTypeRole</key>
-            <string>Editor</string>
-            <key>CFBundleURLSchemes</key>
-            <array>
-                <string>io.studyforge</string>
+                <string>studyforge</string>
             </array>
         </dict>
     </array>
 
     <key>UIApplicationSceneManifest</key>
     <dict>
-       <key>UIApplicationSupportsMultipleScenes</key>
-       <false/>
-       <key>UISceneConfigurations</key>
-       <dict>
-          <key>UIWindowSceneSessionRoleApplication</key>
-          <array>
-             <dict>
-                <key>UISceneClassName</key>
-                <string>UIWindowScene</string>
-                <key>UISceneConfigurationName</key>
-                <string>flutter</string>
-                <key>UISceneDelegateClassName</key>
-                <string>$(PRODUCT_MODULE_NAME).SceneDelegate</string>
-                <key>UISceneStoryboardFile</key>
-                <string>Main</string>
-             </dict>
-          </array>
-       </dict>
+        <key>UIApplicationSupportsMultipleScenes</key>
+        <false/>
+        <key>UISceneConfigurations</key>
+        <dict>
+            <key>UIWindowSceneSessionRoleApplication</key>
+            <array>
+                <dict>
+                    <key>UISceneClassName</key>
+                    <string>UIWindowScene</string>
+                    <key>UISceneConfigurationName</key>
+                    <string>flutter</string>
+                    <key>UISceneDelegateClassName</key>
+                    <string>$(PRODUCT_MODULE_NAME).SceneDelegate</string>
+                    <key>UISceneStoryboardFile</key>
+                    <string>Main</string>
+                </dict>
+            </array>
+        </dict>
     </dict>
     <key>UIApplicationSupportsIndirectInputEvents</key>
     <true/>
@@ -78,16 +69,16 @@
     <string>Main</string>
     <key>UISupportedInterfaceOrientations</key>
     <array>
-       <string>UIInterfaceOrientationPortrait</string>
-       <string>UIInterfaceOrientationLandscapeLeft</string>
-       <string>UIInterfaceOrientationLandscapeRight</string>
+        <string>UIInterfaceOrientationPortrait</string>
+        <string>UIInterfaceOrientationLandscapeLeft</string>
+        <string>UIInterfaceOrientationLandscapeRight</string>
     </array>
     <key>UISupportedInterfaceOrientations~ipad</key>
     <array>
-       <string>UIInterfaceOrientationPortrait</string>
-       <string>UIInterfaceOrientationPortraitUpsideDown</string>
-       <string>UIInterfaceOrientationLandscapeLeft</string>
-       <string>UIInterfaceOrientationLandscapeRight</string>
+        <string>UIInterfaceOrientationPortrait</string>
+        <string>UIInterfaceOrientationPortraitUpsideDown</string>
+        <string>UIInterfaceOrientationLandscapeLeft</string>
+        <string>UIInterfaceOrientationLandscapeRight</string>
     </array>
 </dict>
 </plist>

@@ -5,6 +5,7 @@ import 'package:flutter_animate/flutter_animate.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../core/constants.dart';
 import '../services/auth_service.dart';
+import '../screens/forgot_password_screen.dart';
 
 class LoginScreen extends StatefulWidget {
   final VoidCallback? onSignIn;
@@ -588,8 +589,11 @@ class _LoginScreenState extends State<LoginScreen>
 
               // Forgot password (login mode only)
               if (_isLogin)
-                GestureDetector(
-                  onTap: _showForgotPassword,
+                TextButton(
+                  onPressed: () => Navigator.push(
+                    context,
+                    MaterialPageRoute(builder: (_) => const ForgotPasswordScreen()),
+                  ),
                   child: Text(
                     'Forgot password?',
                     style: TextStyle(

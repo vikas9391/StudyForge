@@ -10,6 +10,10 @@ dependencies:
   flutter:
     sdk: flutter
 
+  app_links: ^6.3.2
+
+  google_sign_in: ^6.2.1
+
   # HTTP client (Dio for API calls)
   dio: ^5.4.3+1
 

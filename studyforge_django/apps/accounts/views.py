@@ -21,6 +21,55 @@ from datetime import timedelta
 from .models import User, Profile
 from .serializers import SignupSerializer, ProfileSerializer, ProfileUpdateSerializer
 from apps.results.models import Result
+from google.oauth2 import id_token
+from google.auth.transport import requests as google_requests
+from rest_framework.views import APIView
+from rest_framework.response import Response
+from rest_framework.permissions import AllowAny
+from rest_framework_simplejwt.tokens import RefreshToken
+from django.contrib.auth import get_user_model
+from django.conf import settings
+
+User = get_user_model()
+
+class GoogleSignInView(APIView):
+    permission_classes = [AllowAny]
+
+    def post(self, request):
+        token = request.data.get('id_token')
+        if not token:
+            return Response({'detail': 'id_token required.'}, status=400)
+
+        try:
+            info = id_token.verify_oauth2_token(
+                token,
+                google_requests.Request(),
+                audience=settings.GOOGLE_CLIENT_ID,
+            )
+        except Exception as e:
+            return Response({'detail': f'Invalid Google token: {e}'}, status=400)
+
+        email = info.get('email')
+        if not email:
+            return Response({'detail': 'Email not in token.'}, status=400)
+
+        # Get or create user silently
+        user, created = User.objects.get_or_create(
+            email=email,
+            defaults={
+                'username':  email.split('@')[0],
+                'is_active': True,
+            }
+        )
+
+        # Issue your app's JWT tokens
+        refresh = RefreshToken.for_user(user)
+        return Response({
+            'access_token':  str(refresh.access_token),
+            'refresh_token': str(refresh),
+            'user_id':       user.id,
+            'email':         user.email,
+        })
 
 
 # ── Auth ───────────────────────────────────────────────────────────────────────
@@ -256,22 +305,88 @@ class AdminToggleAdminView(APIView):
         })
 
 
+# ── Password Reset ─────────────────────────────────────────────────────────────
+
 class ResetPasswordView(APIView):
     permission_classes = [AllowAny]
 
     def post(self, request):
         """POST /auth/reset-password/ — send password reset email."""
-        from django.contrib.auth.forms import PasswordResetForm
+        from django.contrib.auth.tokens import default_token_generator
+        from django.utils.http import urlsafe_base64_encode
+        from django.utils.encoding import force_bytes
+        from django.core.mail import send_mail
+        from django.template.loader import render_to_string
+
         email = request.data.get("email", "").lower().strip()
         if not email:
             return Response({"detail": "Email is required."}, status=400)
 
-        form = PasswordResetForm(data={"email": email})
-        if form.is_valid():
-            form.save(
-                request=request,
-                use_https=request.is_secure(),
-                email_template_name="registration/password_reset_email.html",
+        try:
+            user = User.objects.get(email=email)
+            uid   = urlsafe_base64_encode(force_bytes(user.pk))
+            token = default_token_generator.make_token(user)
+
+            # Build the reset link — opens your Django confirm endpoint
+            scheme   = "https" if request.is_secure() else "http"
+            host     = request.get_host()
+            reset_url = f"studyforge://reset-password?uid={uid}&token={token}"
+
+            html_message = render_to_string("accounts/password_reset_email.html", {
+                "user":      user,
+                "reset_url": reset_url,
+                "site_name": "Studyforge",
+            })
+
+            send_mail(
+                subject="Reset your Studyforge password",
+                message=f"Open this link to reset your password: {reset_url}",
+                from_email=None,   # uses DEFAULT_FROM_EMAIL from settings
+                recipient_list=[user.email],
+                html_message=html_message,
+                fail_silently=False,
             )
-        # Always return 200 — don't reveal whether the email exists
+        except User.DoesNotExist:
+            pass  # Don't reveal whether the email exists
+
         return Response({"message": "If that email exists, a reset link has been sent."})
+
+class ResetPasswordConfirmView(APIView):
+    permission_classes = [AllowAny]
+
+    def post(self, request):
+        """POST /auth/reset-password/confirm/ — verify token and set new password."""
+        from django.contrib.auth.tokens import default_token_generator
+        from django.utils.http import urlsafe_base64_decode
+        from django.utils.encoding import force_str
+
+        uid      = request.data.get("uid", "")
+        token    = request.data.get("token", "")
+        password = request.data.get("password", "")
+
+        if not uid or not token or not password:
+            return Response(
+                {"detail": "uid, token, and password are required."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        if len(password) < 8:
+            return Response(
+                {"detail": "Password must be at least 8 characters."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        try:
+            pk   = force_str(urlsafe_base64_decode(uid))
+            user = User.objects.get(pk=pk)
+        except (User.DoesNotExist, ValueError, TypeError):
+            return Response(
+                {"detail": "Invalid reset link."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        if not default_token_generator.check_token(user, token):
+            return Response(
+                {"detail": "Reset link is invalid or has expired."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        user.set_password(password)
+        user.save()
+        return Response({"message": "Password reset successfully. You can now sign in."})

@@ -1,44 +1,33 @@
-// lib/main.dart
-// App entry point — JWT auth state from SharedPreferences.
-// Supabase has been removed. Auth is now handled by Django + JWT.
-
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_dotenv/flutter_dotenv.dart';
+import 'package:app_links/app_links.dart';
 import 'core/constants.dart';
 import 'screens/login_screen.dart';
 import 'screens/home_screen.dart';
+import 'screens/reset_password_screen.dart';
 import 'services/auth_service.dart';
+import 'services/home_cache.dart';
 import 'widgets/sf_logo.dart';
-import '../services/home_cache.dart';
-
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
-  // Lock to portrait mode
   await SystemChrome.setPreferredOrientations([DeviceOrientation.portraitUp]);
 
-  // Transparent status bar
   SystemChrome.setSystemUIOverlayStyle(const SystemUiOverlayStyle(
     statusBarColor:          Colors.transparent,
     statusBarBrightness:     Brightness.dark,
     statusBarIconBrightness: Brightness.light,
   ));
 
-  // Load .env
   await dotenv.load(fileName: '.env');
-
-  // Load cached userId + email into AuthService sync getters,
-  // then proactively refresh the access token so it's ready before
-  // HomeScreen._loadData() fires. If the refresh token is also expired,
-  // clearTokens() is called inside init() so the user lands on LoginScreen.
   await AuthService.init();
 
   runApp(const StudyforgeApp());
 }
 
-// ── Navigator key — used for programmatic navigation outside widget tree ───────
+// ── Navigator key ─────────────────────────────────────────────────────────────
 final navigatorKey = GlobalKey<NavigatorState>();
 
 // ── App root ──────────────────────────────────────────────────────────────────
@@ -53,19 +42,63 @@ class StudyforgeApp extends StatelessWidget {
       title:                      'Studyforge',
       debugShowCheckedModeBanner: false,
       theme:                      buildAppTheme(),
-      home:                       const AuthGate(),
+      home:                       const _DeepLinkHandler(),
     );
   }
 }
 
-// ── Auth gate — rebuilds whenever login / logout changes ──────────────────────
-//
-// After AuthService.init() runs in main(), isLoggedIn() reflects the
-// post-refresh state: if both tokens were expired, clearTokens() will have
-// wiped the access_token, so isLoggedIn() returns false → LoginScreen.
-//
-// Sign-in path:  LoginScreen calls onSignIn → _AuthGateState re-checks isLoggedIn()
-// Sign-out path: HomeScreen calls onSignOut → _AuthGateState forces false directly
+// ── Deep link handler — wraps AuthGate, intercepts reset links ────────────────
+
+class _DeepLinkHandler extends StatefulWidget {
+  const _DeepLinkHandler();
+
+  @override
+  State<_DeepLinkHandler> createState() => _DeepLinkHandlerState();
+}
+
+class _DeepLinkHandlerState extends State<_DeepLinkHandler> {
+  late final AppLinks _appLinks;
+
+  @override
+  void initState() {
+    super.initState();
+    _initDeepLinks();
+  }
+
+  void _initDeepLinks() {
+    _appLinks = AppLinks();
+
+    // App already running — link arrives as stream event
+    _appLinks.uriLinkStream.listen((uri) {
+      _handleDeepLink(uri);
+    });
+
+    // App cold-started by tapping the link
+    _appLinks.getInitialLink().then((uri) {
+      if (uri != null) _handleDeepLink(uri);
+    });
+  }
+
+  void _handleDeepLink(Uri uri) {
+    if (uri.scheme == 'studyforge' && uri.host == 'reset-password') {
+      final uid   = uri.queryParameters['uid']   ?? '';
+      final token = uri.queryParameters['token'] ?? '';
+      if (uid.isNotEmpty && token.isNotEmpty) {
+        // Small delay ensures the navigator is mounted
+        Future.delayed(const Duration(milliseconds: 200), () {
+          navigatorKey.currentState?.push(MaterialPageRoute(
+            builder: (_) => ResetPasswordScreen(uid: uid, token: token),
+          ));
+        });
+      }
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) => const AuthGate();
+}
+
+// ── Auth gate ─────────────────────────────────────────────────────────────────
 
 class AuthGate extends StatefulWidget {
   const AuthGate({super.key});
@@ -80,19 +113,23 @@ class _AuthGateState extends State<AuthGate> {
   @override
   void initState() {
     super.initState();
-    _loginFuture = AuthService.isLoggedIn();
+    // FIX: Small delay lets Flutter finish rendering the first frame before
+    // making any I/O calls, preventing main-thread overload on startup.
+    _loginFuture = Future.delayed(
+      const Duration(milliseconds: 150),
+          () => AuthService.isLoggedIn(),
+    );
     AuthService.onSessionChanged = () {
       HomeCache.instance.invalidate();
     };
   }
+
   @override
   Widget build(BuildContext context) {
     return FutureBuilder<bool>(
       future: _loginFuture,
       builder: (context, snapshot) {
-        // Show splash while checking
         if (!snapshot.hasData) return const SplashScreen();
-
         if (snapshot.data == true) {
           return HomeScreen(onSignOut: _onSignOut);
         } else {
@@ -102,19 +139,13 @@ class _AuthGateState extends State<AuthGate> {
     );
   }
 
-  void _onSignIn() {
-    setState(() {
-      _loginFuture = AuthService.isLoggedIn();
-    });
-  }
+  void _onSignIn() => setState(() {
+    _loginFuture = AuthService.isLoggedIn();
+  });
 
-  void _onSignOut() {
-    setState(() {
-      // Force immediately to LoginScreen without re-checking prefs,
-      // since AuthService.signOut() already cleared all tokens.
-      _loginFuture = Future.value(false);
-    });
-  }
+  void _onSignOut() => setState(() {
+    _loginFuture = Future.value(false);
+  });
 }
 
 // ── Splash screen ─────────────────────────────────────────────────────────────
@@ -139,11 +170,9 @@ class SplashScreen extends StatelessWidget {
               Text('Turn documents into mastery', style: AppText.caption),
               const SizedBox(height: 32),
               const SizedBox(
-                width:  22,
-                height: 22,
-                child:  CircularProgressIndicator(
-                  color:       AppColors.primary,
-                  strokeWidth: 2.5,
+                width: 22, height: 22,
+                child: CircularProgressIndicator(
+                  color: AppColors.primary, strokeWidth: 2.5,
                 ),
               ),
             ],
