@@ -11,8 +11,8 @@ import dj_database_url
 BASE_DIR = Path(__file__).resolve().parent.parent
 
 # ── Security ───────────────────────────────────────────────────────────────────
-SECRET_KEY = config("SECRET_KEY", default="django-insecure-change-me")
-DEBUG = config("DEBUG", default=True, cast=bool)
+SECRET_KEY    = config("SECRET_KEY", default="django-insecure-change-me")
+DEBUG         = config("DEBUG", default=True, cast=bool)
 ALLOWED_HOSTS = config("ALLOWED_HOSTS", default="*", cast=lambda v: v.split(","))
 
 # ── Apps ───────────────────────────────────────────────────────────────────────
@@ -27,6 +27,7 @@ INSTALLED_APPS = [
     "rest_framework",
     "rest_framework_simplejwt",
     "corsheaders",
+    "anymail",
     # Our apps
     "apps.accounts",
     "apps.results",
@@ -34,12 +35,14 @@ INSTALLED_APPS = [
     "apps.ingest",
     "apps.shared",
     "apps.spaced_repetition",
-    "apps.notifications",       
+    "apps.notifications",
 ]
 
+# ── Middleware ─────────────────────────────────────────────────────────────────
 MIDDLEWARE = [
     "corsheaders.middleware.CorsMiddleware",
     "django.middleware.security.SecurityMiddleware",
+    "whitenoise.middleware.WhiteNoiseMiddleware",
     "django.contrib.sessions.middleware.SessionMiddleware",
     "django.middleware.common.CommonMiddleware",
     "django.middleware.csrf.CsrfViewMiddleware",
@@ -68,11 +71,7 @@ TEMPLATES = [
 
 WSGI_APPLICATION = "studyforge.wsgi.application"
 
-# ── Database — PostgreSQL via DATABASE_URL ─────────────────────────────────────
-# Use a full connection string in .env:
-# DATABASE_URL=postgresql://user:password@host:5432/dbname
-# Neon.tech example:
-# DATABASE_URL=postgresql://user:pass@ep-xxx.us-east-2.aws.neon.tech/neondb?sslmode=require
+# ── Database ───────────────────────────────────────────────────────────────────
 DATABASES = {
     "default": dj_database_url.parse(
         str(config("DATABASE_URL", cast=str)),
@@ -101,21 +100,34 @@ REST_FRAMEWORK = {
 
 # ── JWT ────────────────────────────────────────────────────────────────────────
 SIMPLE_JWT = {
-    "ACCESS_TOKEN_LIFETIME":    timedelta(hours=config("ACCESS_TOKEN_LIFETIME_HOURS", default=1,  cast=int)),
-    "REFRESH_TOKEN_LIFETIME":   timedelta(days=config("REFRESH_TOKEN_LIFETIME_DAYS",  default=30, cast=int)),
+    "ACCESS_TOKEN_LIFETIME":  timedelta(hours=config("ACCESS_TOKEN_LIFETIME_HOURS", default=1,  cast=int)),
+    "REFRESH_TOKEN_LIFETIME": timedelta(days=config("REFRESH_TOKEN_LIFETIME_DAYS",  default=30, cast=int)),
     "ROTATE_REFRESH_TOKENS":    True,
     "BLACKLIST_AFTER_ROTATION": False,
     "AUTH_HEADER_TYPES":        ("Bearer",),
 }
 
-GOOGLE_CLIENT_ID = config('GOOGLE_CLIENT_ID', default='')
+# ── Google OAuth ───────────────────────────────────────────────────────────────
+GOOGLE_CLIENT_ID = config("GOOGLE_CLIENT_ID", default="")
 
-# ── CORS — allow Flutter app ───────────────────────────────────────────────────
-CORS_ALLOW_ALL_ORIGINS = True   # narrow this in production
+# ── CORS ───────────────────────────────────────────────────────────────────────
+if DEBUG:
+    CORS_ALLOW_ALL_ORIGINS = True
+else:
+    CORS_ALLOWED_ORIGINS = config(
+        "CORS_ALLOWED_ORIGINS",
+        default="",
+        cast=lambda v: [s.strip() for s in v.split(",") if s.strip()],
+    )
 
 # ── File Storage ───────────────────────────────────────────────────────────────
 MEDIA_URL  = "/media/"
 MEDIA_ROOT = BASE_DIR / str(config("MEDIA_ROOT", default="media"))
+
+# ── Static files (WhiteNoise) ──────────────────────────────────────────────────
+STATIC_URL          = "/static/"
+STATIC_ROOT         = BASE_DIR / "staticfiles"
+STATICFILES_STORAGE = "whitenoise.storage.CompressedManifestStaticFilesStorage"
 
 # ── Hugging Face ───────────────────────────────────────────────────────────────
 HF_API_TOKEN = config("HF_API_TOKEN", default="")
@@ -126,18 +138,31 @@ TIME_ZONE     = "UTC"
 USE_I18N      = True
 USE_TZ        = True
 
-STATIC_URL = "/static/"
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 
 # ── Email ──────────────────────────────────────────────────────────────────────
-# For development: prints emails to the console instead of sending
-EMAIL_BACKEND    = config("EMAIL_BACKEND", default="django.core.mail.backends.console.EmailBackend")
-EMAIL_HOST       = config("EMAIL_HOST",     default="smtp.gmail.com")
-EMAIL_PORT       = config("EMAIL_PORT",     default=587,  cast=int)
-EMAIL_USE_TLS    = config("EMAIL_USE_TLS",  default=True, cast=bool)
-EMAIL_HOST_USER  = config("EMAIL_HOST_USER",  default="")
-EMAIL_HOST_PASSWORD = config("EMAIL_HOST_PASSWORD", default="")
-DEFAULT_FROM_EMAIL  = config("DEFAULT_FROM_EMAIL", default="Studyforge <noreply@studyforge.app>")
+# Dev  → console backend (prints to terminal, no real sending)
+#        EMAIL_BACKEND=django.core.mail.backends.console.EmailBackend
+#
+# Prod → Resend via anymail (works on Render free tier, no SMTP ports needed)
+#        EMAIL_BACKEND=anymail.backends.resend.EmailBackend
+#        RESEND_API_KEY=re_xxxxxxxxxxxx
+#        DEFAULT_FROM_EMAIL=Studyforge <onboarding@resend.dev>
 
-# Make sure app templates are discoverable
+EMAIL_BACKEND      = config("EMAIL_BACKEND",      default="django.core.mail.backends.console.EmailBackend")
+DEFAULT_FROM_EMAIL = config("DEFAULT_FROM_EMAIL", default="Studyforge <onboarding@resend.dev>")
+
+ANYMAIL = {
+    "RESEND_API_KEY": config("RESEND_API_KEY", default=""),
+}
+
+# ── Production security ────────────────────────────────────────────────────────
+if not DEBUG:
+    SECURE_HSTS_SECONDS            = 31536000
+    SECURE_HSTS_INCLUDE_SUBDOMAINS = True
+    SECURE_SSL_REDIRECT            = True
+    SESSION_COOKIE_SECURE          = True
+    CSRF_COOKIE_SECURE             = True
+
+# ── Templates ─────────────────────────────────────────────────────────────────
 TEMPLATES[0]["DIRS"] += [BASE_DIR / "apps" / "accounts" / "templates"]
