@@ -7,15 +7,13 @@ import 'package:google_sign_in/google_sign_in.dart';
 
 class AuthService {
   static String get _base =>
-      dotenv.env['API_BASE_URL'] ?? 'http://10.0.2.2:8000';
+      dotenv.env['API_BASE_URL'] ?? 'https://studyforge-api-08xo.onrender.com';
 
   static VoidCallback? onSessionChanged;
 
-  // ── In-memory cache so screens can call userId/userEmail synchronously ────
   static String _cachedUserId = '';
   static String _cachedEmail  = '';
 
-  /// Call once in main() after SharedPreferences is available.
   static Future<void> init() async {
     final prefs = await SharedPreferences.getInstance();
     _cachedUserId = prefs.getString('user_id') ?? '';
@@ -30,12 +28,8 @@ class AuthService {
     }
   }
 
-  // ── Sync getters ──────────────────────────────────────────────────────────
-
   static String get userId    => _cachedUserId;
   static String get userEmail => _cachedEmail;
-
-  // ── Async helpers ─────────────────────────────────────────────────────────
 
   static Future<String?> getAccessToken() async {
     final prefs = await SharedPreferences.getInstance();
@@ -52,8 +46,6 @@ class AuthService {
     return token != null && token.isNotEmpty;
   }
 
-  // ── Token storage ─────────────────────────────────────────────────────────
-
   static Future<void> _saveTokens({
     required String access,
     required String refresh,
@@ -67,7 +59,7 @@ class AuthService {
     await prefs.setString('email',         email);
     _cachedUserId = userId;
     _cachedEmail  = email;
-    onSessionChanged?.call(); // notify cache / any listener
+    onSessionChanged?.call();
   }
 
   static Future<void> clearTokens() async {
@@ -78,10 +70,8 @@ class AuthService {
     await prefs.remove('email');
     _cachedUserId = '';
     _cachedEmail  = '';
-    onSessionChanged?.call(); // notify cache / any listener
+    onSessionChanged?.call();
   }
-
-  // ── Token refresh ─────────────────────────────────────────────────────────
 
   static Future<bool> refreshAccessToken() async {
     final prefs        = await SharedPreferences.getInstance();
@@ -106,9 +96,7 @@ class AuthService {
         try {
           final body = jsonDecode(resp.body) as Map<String, dynamic>;
           final code = body['code'] as String? ?? '';
-          if (code == 'token_not_valid') {
-            await clearTokens();
-          }
+          if (code == 'token_not_valid') await clearTokens();
         } catch (_) {}
       }
     } on TimeoutException {
@@ -119,8 +107,6 @@ class AuthService {
 
     return false;
   }
-
-  // ── Authorised request helpers ────────────────────────────────────────────
 
   static Future<http.Response> authorizedGet(String url) async {
     final token = await getAccessToken();
@@ -185,8 +171,6 @@ class AuthService {
     return response;
   }
 
-  // ── Sign Up ───────────────────────────────────────────────────────────────
-
   static Future<Map<String, dynamic>> signUp({
     required String email,
     required String password,
@@ -212,8 +196,6 @@ class AuthService {
       return {'success': false, 'error': 'Cannot reach server: $e'};
     }
   }
-
-  // ── Sign In ───────────────────────────────────────────────────────────────
 
   static Future<Map<String, dynamic>> signIn({
     required String email,
@@ -241,8 +223,6 @@ class AuthService {
     }
   }
 
-  // ── Sign Out ──────────────────────────────────────────────────────────────
-
   static Future<void> signOut() async {
     final prefs        = await SharedPreferences.getInstance();
     final accessToken  = prefs.getString('access_token')  ?? '';
@@ -257,30 +237,22 @@ class AuthService {
         },
         body: jsonEncode({'refresh_token': refreshToken}),
       ).timeout(const Duration(seconds: 5));
-    } catch (_) {
-      // Fire-and-forget — always clear local state even if request fails.
-    }
-    await clearTokens(); // fires onSessionChanged internally
+    } catch (_) {}
+    await clearTokens();
   }
 
-  // ── Google Sign-In ────────────────────────────────────────────────────────
-
-// inside AuthService class:
-
   static final _googleSignIn = GoogleSignIn(
-    clientId: dotenv.env['GOOGLE_CLIENT_ID'],
+    clientId: dotenv.env['GOOGLE_SERVER_CLIENT_ID'],
     scopes: ['email', 'profile'],
   );
 
   static Future<Map<String, dynamic>> signInWithGoogle() async {
     try {
-      // Trigger Google account picker
       final googleUser = await _googleSignIn.signIn();
       if (googleUser == null) {
         return {'success': false, 'error': 'Sign-in cancelled.'};
       }
 
-      // Get id_token from Google
       final googleAuth = await googleUser.authentication;
       final idToken    = googleAuth.idToken;
 
@@ -288,7 +260,6 @@ class AuthService {
         return {'success': false, 'error': 'Failed to get Google token.'};
       }
 
-      // Send to Django for verification
       final resp = await http.post(
         Uri.parse('$_base/auth/google/'),
         headers: {'Content-Type': 'application/json'},
@@ -307,16 +278,13 @@ class AuthService {
         return {'success': true};
       }
 
-      return {
-        'success': false,
-        'error': data['detail'] ?? 'Google sign-in failed.'
-      };
+      return {'success': false, 'error': data['detail'] ?? 'Google sign-in failed.'};
     } catch (e) {
       return {'success': false, 'error': 'Google sign-in error: $e'};
     }
   }
 
-  // ── Password Reset ────────────────────────────────────────────────────────
+  // ── Password Reset ─────────────────────────────────────────────────────────
 
   static Future<Map<String, dynamic>> resetPassword({
     required String email,
@@ -329,6 +297,29 @@ class AuthService {
       );
       if (resp.statusCode == 200) {
         return {'success': true, 'message': 'Password reset email sent.'};
+      }
+      final data = jsonDecode(resp.body) as Map<String, dynamic>;
+      return {'success': false, 'error': data['detail'] ?? 'Reset failed.'};
+    } catch (e) {
+      return {'success': false, 'error': 'Cannot reach server: $e'};
+    }
+  }
+
+  // ── Password Reset Confirm ─────────────────────────────────────────────────
+
+  static Future<Map<String, dynamic>> resetPasswordConfirm({
+    required String uid,
+    required String token,
+    required String password,
+  }) async {
+    try {
+      final resp = await http.post(
+        Uri.parse('$_base/auth/reset-password/confirm/'),
+        headers: {'Content-Type': 'application/json'},
+        body: jsonEncode({'uid': uid, 'token': token, 'password': password}),
+      );
+      if (resp.statusCode == 200) {
+        return {'success': true};
       }
       final data = jsonDecode(resp.body) as Map<String, dynamic>;
       return {'success': false, 'error': data['detail'] ?? 'Reset failed.'};

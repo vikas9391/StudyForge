@@ -1,7 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_animate/flutter_animate.dart';
-import 'package:http/http.dart' as http;
-import 'dart:convert';
+import '../services/auth_service.dart';
 import '../core/constants.dart';
 
 class ResetPasswordScreen extends StatefulWidget {
@@ -50,30 +49,17 @@ class _ResetPasswordScreenState extends State<ResetPasswordScreen> {
 
     setState(() => _loading = true);
 
-    try {
-      final res = await http.post(
-        Uri.parse('${AppConstants.apiBaseUrl}/auth/reset-password/confirm/'),
-        headers: {'Content-Type': 'application/json'},
-        body: jsonEncode({
-          'uid':      widget.uid,
-          'token':    widget.token,
-          'password': pw,
-        }),
-      );
+    final result = await AuthService.resetPasswordConfirm(
+      uid:      widget.uid,
+      token:    widget.token,
+      password: pw,
+    );
 
-      final body = jsonDecode(res.body);
-
-      if (res.statusCode == 200) {
-        setState(() { _success = true; _loading = false; });
-      } else {
-        setState(() {
-          _error   = body['detail'] ?? 'Something went wrong.';
-          _loading = false;
-        });
-      }
-    } catch (_) {
+    if (result['success'] == true) {
+      setState(() { _success = true; _loading = false; });
+    } else {
       setState(() {
-        _error   = 'Network error. Please try again.';
+        _error   = result['error'] ?? 'Something went wrong.';
         _loading = false;
       });
     }
@@ -100,8 +86,6 @@ class _ResetPasswordScreenState extends State<ResetPasswordScreen> {
       child: Column(
         children: [
           const SizedBox(height: 24),
-
-          // Success icon
           Container(
             padding: const EdgeInsets.all(22),
             decoration: BoxDecoration(
@@ -112,28 +96,17 @@ class _ResetPasswordScreenState extends State<ResetPasswordScreen> {
                 width: 1.5,
               ),
             ),
-            child: Icon(
-              Icons.check_rounded,
-              color: AppColors.accentGreen,
-              size: 44,
-            ),
+            child: Icon(Icons.check_rounded, color: AppColors.accentGreen, size: 44),
           ),
-
           const SizedBox(height: 24),
-
           Text('Password reset!', style: AppText.display(22)),
-
           const SizedBox(height: 10),
-
           Text(
             'You can now sign in with your new password.',
             textAlign: TextAlign.center,
             style: AppText.body,
           ),
-
           const SizedBox(height: 36),
-
-          // Back to sign in
           GestureDetector(
             onTap: () => Navigator.of(context).popUntil((r) => r.isFirst),
             child: Container(
@@ -154,15 +127,11 @@ class _ResetPasswordScreenState extends State<ResetPasswordScreen> {
                 child: Row(
                   mainAxisSize: MainAxisSize.min,
                   children: [
-                    const Icon(Icons.login_rounded,
-                        color: Colors.white, size: 16),
+                    const Icon(Icons.login_rounded, color: Colors.white, size: 16),
                     const SizedBox(width: 8),
                     Text(
                       'Back to Sign In',
-                      style: AppText.subheading.copyWith(
-                        color: Colors.white,
-                        fontSize: 15,
-                      ),
+                      style: AppText.subheading.copyWith(color: Colors.white, fontSize: 15),
                     ),
                   ],
                 ),
@@ -178,8 +147,6 @@ class _ResetPasswordScreenState extends State<ResetPasswordScreen> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-
-        // Icon
         Container(
           width: 52, height: 52,
           decoration: BoxDecoration(
@@ -187,46 +154,32 @@ class _ResetPasswordScreenState extends State<ResetPasswordScreen> {
             borderRadius: BorderRadius.circular(14),
             border: Border.all(color: AppColors.primary.withOpacity(0.20)),
           ),
-          child: Icon(Icons.lock_outline_rounded,
-              size: 26, color: AppColors.primary),
+          child: Icon(Icons.lock_outline_rounded, size: 26, color: AppColors.primary),
         ).animate().fadeIn(duration: 350.ms).scale(
           begin: const Offset(0.85, 0.85),
           curve: Curves.easeOutBack,
         ),
-
         const SizedBox(height: 20),
-
         Text('Set new password', style: AppText.display(24))
             .animate().fadeIn(delay: 100.ms),
-
         const SizedBox(height: 8),
-
         Text('Must be at least 8 characters.', style: AppText.body)
             .animate().fadeIn(delay: 150.ms),
-
         const SizedBox(height: 32),
-
-        // New password
         _PasswordField(
-          label:    'New password',
+          label:      'New password',
           controller: _pwController,
-          show:     _showPw,
-          onToggle: () => setState(() => _showPw = !_showPw),
+          show:       _showPw,
+          onToggle:   () => setState(() => _showPw = !_showPw),
         ).animate().fadeIn(delay: 200.ms),
-
         const SizedBox(height: 16),
-
-        // Confirm password
         _PasswordField(
-          label:    'Confirm password',
+          label:      'Confirm password',
           controller: _pw2Controller,
-          show:     _showPw2,
-          onToggle: () => setState(() => _showPw2 = !_showPw2),
+          show:       _showPw2,
+          onToggle:   () => setState(() => _showPw2 = !_showPw2),
         ).animate().fadeIn(delay: 250.ms),
-
         const SizedBox(height: 12),
-
-        // Error banner
         if (_error != null)
           Container(
             padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
@@ -237,23 +190,18 @@ class _ResetPasswordScreenState extends State<ResetPasswordScreen> {
             ),
             child: Row(
               children: [
-                Icon(Icons.error_outline_rounded,
-                    color: AppColors.accentRed, size: 16),
+                Icon(Icons.error_outline_rounded, color: AppColors.accentRed, size: 16),
                 const SizedBox(width: 8),
                 Expanded(
                   child: Text(
                     _error!,
-                    style: AppText.caption.copyWith(
-                        color: AppColors.accentRed, height: 1.4),
+                    style: AppText.caption.copyWith(color: AppColors.accentRed, height: 1.4),
                   ),
                 ),
               ],
             ),
           ).animate().fadeIn().slideY(begin: -0.15),
-
         const SizedBox(height: 28),
-
-        // Submit button
         GestureDetector(
           onTap: _loading ? null : _submit,
           child: AnimatedContainer(
@@ -263,18 +211,17 @@ class _ResetPasswordScreenState extends State<ResetPasswordScreen> {
             decoration: BoxDecoration(
               gradient: LinearGradient(
                 colors: _loading
-                    ? [AppColors.primary.withOpacity(0.5),
-                  AppColors.primaryEnd.withOpacity(0.5)]
+                    ? [AppColors.primary.withOpacity(0.5), AppColors.primaryEnd.withOpacity(0.5)]
                     : [AppColors.primary, AppColors.primaryEnd],
                 begin: Alignment.topLeft,
-                end: Alignment.bottomRight,
+                end:   Alignment.bottomRight,
               ),
               borderRadius: BorderRadius.circular(14),
               boxShadow: _loading ? [] : [
                 BoxShadow(
-                  color: AppColors.primary.withOpacity(0.25),
+                  color:      AppColors.primary.withOpacity(0.25),
                   blurRadius: 16,
-                  offset: const Offset(0, 6),
+                  offset:     const Offset(0, 6),
                 ),
               ],
             ),
@@ -290,15 +237,11 @@ class _ResetPasswordScreenState extends State<ResetPasswordScreen> {
                   : Row(
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  const Icon(Icons.lock_reset_rounded,
-                      color: Colors.white, size: 16),
+                  const Icon(Icons.lock_reset_rounded, color: Colors.white, size: 16),
                   const SizedBox(width: 8),
                   Text(
                     'Reset Password',
-                    style: AppText.subheading.copyWith(
-                      color: Colors.white,
-                      fontSize: 15,
-                    ),
+                    style: AppText.subheading.copyWith(color: Colors.white, fontSize: 15),
                   ),
                 ],
               ),
@@ -310,7 +253,7 @@ class _ResetPasswordScreenState extends State<ResetPasswordScreen> {
   }
 }
 
-// ── Password field ────────────────────────────────────────────────────────────
+// ── Password field ─────────────────────────────────────────────────────────────
 
 class _PasswordField extends StatelessWidget {
   final TextEditingController controller;
@@ -333,9 +276,9 @@ class _PasswordField extends StatelessWidget {
         Text(
           label,
           style: AppText.label.copyWith(
-            fontSize: 12,
+            fontSize:   12,
             fontWeight: FontWeight.w600,
-            color: AppColors.textSecond,
+            color:      AppColors.textSecond,
           ),
         ),
         const SizedBox(height: 6),
@@ -343,47 +286,40 @@ class _PasswordField extends StatelessWidget {
           controller:  controller,
           obscureText: !show,
           autocorrect: false,
-          style: AppText.body.copyWith(
-              fontSize: 14, color: AppColors.textPrimary),
+          style: AppText.body.copyWith(fontSize: 14, color: AppColors.textPrimary),
           decoration: InputDecoration(
-            hintText: '••••••••',
-            hintStyle: AppText.body.copyWith(
-                color: AppColors.textMuted, fontSize: 14),
-            prefixIcon: Icon(Icons.lock_outline_rounded,
-                color: AppColors.textSecond, size: 18),
+            hintText:  '••••••••',
+            hintStyle: AppText.body.copyWith(color: AppColors.textMuted, fontSize: 14),
+            prefixIcon: Icon(Icons.lock_outline_rounded, color: AppColors.textSecond, size: 18),
             suffixIcon: GestureDetector(
               onTap: onToggle,
               child: Padding(
                 padding: const EdgeInsets.only(right: 4),
                 child: Icon(
-                  show
-                      ? Icons.visibility_off_outlined
-                      : Icons.visibility_outlined,
+                  show ? Icons.visibility_off_outlined : Icons.visibility_outlined,
                   color: AppColors.textSecond,
-                  size: 18,
+                  size:  18,
                 ),
               ),
             ),
-            filled: true,
-            fillColor: AppColors.surface,
-            contentPadding: const EdgeInsets.symmetric(
-                horizontal: 16, vertical: 14),
+            filled:      true,
+            fillColor:   AppColors.surface,
+            contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
             border: OutlineInputBorder(
               borderRadius: BorderRadius.circular(12),
-              borderSide: BorderSide(color: AppColors.border),
+              borderSide:   BorderSide(color: AppColors.border),
             ),
             enabledBorder: OutlineInputBorder(
               borderRadius: BorderRadius.circular(12),
-              borderSide: BorderSide(color: AppColors.border),
+              borderSide:   BorderSide(color: AppColors.border),
             ),
             focusedBorder: OutlineInputBorder(
               borderRadius: BorderRadius.circular(12),
-              borderSide: BorderSide(color: AppColors.primary, width: 1.5),
+              borderSide:   BorderSide(color: AppColors.primary, width: 1.5),
             ),
             errorBorder: OutlineInputBorder(
               borderRadius: BorderRadius.circular(12),
-              borderSide: BorderSide(
-                  color: AppColors.accentRed.withOpacity(0.6)),
+              borderSide:   BorderSide(color: AppColors.accentRed.withOpacity(0.6)),
             ),
           ),
         ),

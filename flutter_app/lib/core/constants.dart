@@ -3,6 +3,7 @@
 
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
+import 'package:flutter_dotenv/flutter_dotenv.dart';
 
 // ── Color Palette ─────────────────────────────────────────────────────────────
 class AppColors {
@@ -208,9 +209,4 @@ ThemeData buildAppTheme() {
       iconTheme: IconThemeData(color: AppColors.textSecond),
     ),
   );
-}
-
-// ── API Constants ─────────────────────────────────────────────────────────────
-class AppConstants {
-  static const String apiBaseUrl = 'http://10.0.2.2:8000';
 }

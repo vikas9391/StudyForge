@@ -1,8 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_animate/flutter_animate.dart';
-import 'package:http/http.dart' as http;
-import 'dart:convert';
 import '../core/constants.dart';
+import '../services/auth_service.dart';
 
 class ForgotPasswordScreen extends StatefulWidget {
   const ForgotPasswordScreen({super.key});
@@ -34,25 +33,13 @@ class _ForgotPasswordScreenState extends State<ForgotPasswordScreen> {
 
     setState(() => _loading = true);
 
-    try {
-      final res = await http.post(
-        Uri.parse('${AppConstants.apiBaseUrl}/auth/reset-password/'),
-        headers: {'Content-Type': 'application/json'},
-        body: jsonEncode({'email': email}),
-      );
+    final result = await AuthService.resetPassword(email: email);
 
-      if (res.statusCode == 200) {
-        setState(() { _sent = true; _loading = false; });
-      } else {
-        final body = jsonDecode(res.body);
-        setState(() {
-          _error   = body['detail'] ?? 'Something went wrong.';
-          _loading = false;
-        });
-      }
-    } catch (_) {
+    if (result['success'] == true) {
+      setState(() { _sent = true; _loading = false; });
+    } else {
       setState(() {
-        _error   = 'Network error. Please try again.';
+        _error   = result['error'] ?? 'Something went wrong.';
         _loading = false;
       });
     }

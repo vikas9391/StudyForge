@@ -66,6 +66,9 @@ htmlcov/
 .pub/
 build/
 
+key.properties
+app/release.keystore
+
 # Flutter generated files
 **/generated_plugin_registrant.dart
 
