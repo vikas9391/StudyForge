@@ -228,16 +228,17 @@ class AuthService {
     final accessToken  = prefs.getString('access_token')  ?? '';
     final refreshToken = prefs.getString('refresh_token') ?? '';
 
-    try {
-      await http.post(
-        Uri.parse('$_base/auth/signout/'),
-        headers: {
-          'Content-Type':  'application/json',
-          'Authorization': 'Bearer $accessToken',
-        },
-        body: jsonEncode({'refresh_token': refreshToken}),
-      ).timeout(const Duration(seconds: 5));
-    } catch (_) {}
+    // Fire-and-forget server logout — don't let it block local cleanup
+    http.post(
+      Uri.parse('$_base/auth/signout/'),
+      headers: {
+        'Content-Type':  'application/json',
+        'Authorization': 'Bearer $accessToken',
+      },
+      body: jsonEncode({'refresh_token': refreshToken}),
+    ).timeout(const Duration(seconds: 5)).catchError((_) {});
+
+    // Always clear local tokens regardless of server response
     await clearTokens();
   }
 

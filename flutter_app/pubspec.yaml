@@ -61,6 +61,7 @@ dev_dependencies:
 flutter_launcher_icons:
   android: true
   ios: true
+  remove_alpha_ios: true
   image_path: "assets/images/studyforge_logo.png"
   adaptive_icon_background: "#F8F5F0"
   adaptive_icon_foreground: "assets/images/studyforge_logo_fg.png"
@@ -72,5 +73,6 @@ flutter:
   uses-material-design: true
   assets:
     - .env
-    - assets/images/studyforge_logo.svg
+#    - assets/images/studyforge_logo.svg
     - assets/images/studyforge_logo.png
+    - assets/images/studyforge_logo_fg.png

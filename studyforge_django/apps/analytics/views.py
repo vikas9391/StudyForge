@@ -1,8 +1,6 @@
 """
 apps/analytics/views.py
-Mirrors routers/analytics.py exactly — same endpoints, same response shapes.
 """
-
 from collections import defaultdict
 from datetime import datetime, timedelta, date
 

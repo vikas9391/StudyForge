@@ -173,7 +173,11 @@ class ApiService {
       final response = await dio.post(
         '/upload/',
         data: formData,
-        options: diolib.Options(contentType: 'multipart/form-data'),
+        options: diolib.Options(
+          contentType: 'multipart/form-data',
+          sendTimeout:    const Duration(minutes: 5),  // large PDF upload
+          receiveTimeout: const Duration(minutes: 3),
+        ),
       );
       return response.data as Map<String, dynamic>;
     } on diolib.DioException catch (e) {
@@ -328,7 +332,11 @@ class ApiService {
       final response = await dio.post(
         '/ingest/ocr/',
         data: formData,
-        options: diolib.Options(contentType: 'multipart/form-data'),
+        options: diolib.Options(
+          contentType: 'multipart/form-data',
+          sendTimeout:    const Duration(minutes: 3),
+          receiveTimeout: const Duration(minutes: 2),
+        ),
       );
       return response.data as Map<String, dynamic>;
     } on diolib.DioException catch (e) {

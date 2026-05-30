@@ -166,3 +166,6 @@ if not DEBUG:
 
 # ── Templates ─────────────────────────────────────────────────────────────────
 TEMPLATES[0]["DIRS"] += [BASE_DIR / "apps" / "accounts" / "templates"]
+
+DATA_UPLOAD_MAX_MEMORY_SIZE = 52_428_800 
+FILE_UPLOAD_MAX_MEMORY_SIZE = 52_428_800 

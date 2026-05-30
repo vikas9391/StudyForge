@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'package:app_links/app_links.dart';
+import 'package:flutter_animate/flutter_animate.dart';
 import 'core/constants.dart';
 import 'screens/login_screen.dart';
 import 'screens/home_screen.dart';
@@ -150,9 +151,14 @@ class _AuthGateState extends State<AuthGate> {
 
 // ── Splash screen ─────────────────────────────────────────────────────────────
 
-class SplashScreen extends StatelessWidget {
+class SplashScreen extends StatefulWidget {
   const SplashScreen({super.key});
 
+  @override
+  State<SplashScreen> createState() => _SplashScreenState();
+}
+
+class _SplashScreenState extends State<SplashScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -163,18 +169,50 @@ class SplashScreen extends StatelessWidget {
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              const SFLogo(size: 72),
-              const SizedBox(height: 20),
-              Text('Studyforge', style: AppText.display(28)),
+              // 1. Logo — scales in with elastic bounce + shimmer sweep
+              const SFLogo(size: 110),
+
+              const SizedBox(height: 24),
+
+              // 2. App name — slides up after logo lands
+              Text('Studyforge', style: AppText.display(28))
+                  .animate()
+                  .slideY(
+                begin: 0.4,
+                end: 0,
+                delay: 600.ms,
+                duration: 500.ms,
+                curve: Curves.easeOutCubic,
+              )
+                  .fadeIn(delay: 600.ms, duration: 500.ms),
+
               const SizedBox(height: 8),
-              Text('Turn documents into mastery', style: AppText.caption),
-              const SizedBox(height: 32),
-              const SizedBox(
-                width: 22, height: 22,
-                child: CircularProgressIndicator(
-                  color: AppColors.primary, strokeWidth: 2.5,
-                ),
+
+              // 3. Tagline — fades in a bit after
+              Text('Turn documents into mastery', style: AppText.caption)
+                  .animate()
+                  .fadeIn(delay: 900.ms, duration: 500.ms)
+                  .slideY(
+                begin: 0.3,
+                end: 0,
+                delay: 900.ms,
+                duration: 400.ms,
+                curve: Curves.easeOut,
               ),
+
+              const SizedBox(height: 40),
+
+              // 4. Spinner — appears last
+              const SizedBox(
+                width: 22,
+                height: 22,
+                child: CircularProgressIndicator(
+                  color: AppColors.primary,
+                  strokeWidth: 2.5,
+                ),
+              )
+                  .animate()
+                  .fadeIn(delay: 1100.ms, duration: 400.ms),
             ],
           ),
         ),

@@ -212,22 +212,17 @@ class _ProfileScreenState extends State<ProfileScreen>
                 setState(() => _editing = true);
               },
               child: Container(
-                padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 9),
                 decoration: BoxDecoration(
-                  color: AppColors.primaryGlow,
+                  color: AppColors.primary,                  // ← solid, visible
                   borderRadius: BorderRadius.circular(10),
-                  border: Border.all(
-                      color: AppColors.primary.withOpacity(0.25)),
                 ),
                 child: Row(mainAxisSize: MainAxisSize.min, children: [
-                  Icon(Icons.edit_rounded,
-                      size: 14, color: AppColors.primary),
+                  const Icon(Icons.edit_rounded, size: 14, color: Colors.white),
                   const SizedBox(width: 6),
-                  Text('Edit',
-                      style: TextStyle(
-                          fontSize: 13,
-                          fontWeight: FontWeight.w600,
-                          color: AppColors.primary)),
+                  const Text('Edit', style: TextStyle(
+                      fontSize: 13, fontWeight: FontWeight.w700,
+                      color: Colors.white)),
                 ]),
               ),
             ),
@@ -284,7 +279,7 @@ class _ProfileScreenState extends State<ProfileScreen>
     return Padding(
       padding: const EdgeInsets.fromLTRB(14, 14, 14, 0),
       child: Container(
-        padding: const EdgeInsets.all(3),
+        padding: const EdgeInsets.all(4),             // ← slightly more room
         decoration: BoxDecoration(
           color: AppColors.surface,
           borderRadius: BorderRadius.circular(14),
@@ -293,10 +288,15 @@ class _ProfileScreenState extends State<ProfileScreen>
         child: TabBar(
           controller: _tabs,
           dividerColor: Colors.transparent,
+          splashFactory: NoSplash.splashFactory,       // ← no ink overflow
+          overlayColor: WidgetStateProperty.all(Colors.transparent),
           indicator: BoxDecoration(
             color: AppColors.primary,
             borderRadius: BorderRadius.circular(10),
           ),
+          indicatorSize: TabBarIndicatorSize.tab,      // ← fill the tab cell
+          padding: EdgeInsets.zero,                    // ← no extra indent
+          labelPadding: EdgeInsets.zero,               // ← text centred in pill
           labelStyle: const TextStyle(
               fontSize: 13, fontWeight: FontWeight.w700),
           unselectedLabelStyle: const TextStyle(

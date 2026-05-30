@@ -25,6 +25,61 @@ class UploadScreen extends StatefulWidget {
   State<UploadScreen> createState() => _UploadScreenState();
 }
 
+// Add after _TypePill class:
+
+class _SourceTile extends StatelessWidget {
+  final IconData icon;
+  final String   label, sub;
+  final Color    color;
+  final VoidCallback onTap;
+  const _SourceTile({
+    required this.icon,
+    required this.label,
+    required this.sub,
+    required this.color,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      onTap: onTap,
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+        decoration: BoxDecoration(
+          color: color.withOpacity(0.07),
+          borderRadius: BorderRadius.circular(14),
+          border: Border.all(color: color.withOpacity(0.20)),
+        ),
+        child: Row(children: [
+          Container(
+            width: 40, height: 40,
+            decoration: BoxDecoration(
+              color: color.withOpacity(0.12),
+              borderRadius: BorderRadius.circular(11),
+            ),
+            child: Center(child: Icon(icon, color: color, size: 20)),
+          ),
+          const SizedBox(width: 14),
+          Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Text(label,
+                style: TextStyle(
+                    fontSize: 13,
+                    fontWeight: FontWeight.w700,
+                    color: AppColors.textPrimary)),
+            const SizedBox(height: 2),
+            Text(sub,
+                style: TextStyle(fontSize: 11, color: AppColors.textSecond)),
+          ]),
+          const Spacer(),
+          Icon(Icons.arrow_forward_ios_rounded,
+              size: 13, color: AppColors.textSecond),
+        ]),
+      ),
+    );
+  }
+}
+
 class _UploadScreenState extends State<UploadScreen>
     with TickerProviderStateMixin {
   final _api  = ApiService();
@@ -82,9 +137,11 @@ class _UploadScreenState extends State<UploadScreen>
   }
 
   bool _validateFile(String path, String name, int sizeBytes) {
-    final sizeMb = sizeBytes / (1024 * 1024);
-    if (sizeMb > 10) {
-      setState(() => _error = 'File is ${sizeMb.toStringAsFixed(1)} MB — max 10 MB.');
+    final f      = File(path);
+    final actual = f.existsSync() ? f.lengthSync() : sizeBytes;
+    final sizeMb = actual / (1024 * 1024);
+    if (sizeMb > 50) {
+      setState(() => _error = 'File is ${sizeMb.toStringAsFixed(1)} MB — max 50 MB.');
       return false;
     }
     final ext = name.split('.').last.toLowerCase();
@@ -113,14 +170,79 @@ class _UploadScreenState extends State<UploadScreen>
   }
 
   Future<void> _pickImage() async {
+    // Let user choose camera or gallery
+    final source = await showModalBottomSheet<ImageSource>(
+      context: context,
+      backgroundColor: AppColors.surface,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (_) => SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(16, 12, 16, 16),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Container(
+                width: 36, height: 4,
+                margin: const EdgeInsets.only(bottom: 16),
+                decoration: BoxDecoration(
+                  color: AppColors.border,
+                  borderRadius: BorderRadius.circular(2),
+                ),
+              ),
+              Text('Select Image Source',
+                  style: TextStyle(
+                      fontSize: 15,
+                      fontWeight: FontWeight.w700,
+                      color: AppColors.textPrimary)),
+              const SizedBox(height: 16),
+              _SourceTile(
+                icon: Icons.camera_alt_rounded,
+                label: 'Take a Photo',
+                sub: 'Use your camera',
+                color: AppColors.primary,
+                onTap: () => Navigator.pop(context, ImageSource.camera),
+              ),
+              const SizedBox(height: 10),
+              _SourceTile(
+                icon: Icons.photo_library_rounded,
+                label: 'Choose from Gallery',
+                sub: 'Pick an existing image',
+                color: AppColors.accentGreen,
+                onTap: () => Navigator.pop(context, ImageSource.gallery),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+
+    if (source == null) return;
+
     final picker = ImagePicker();
     final picked = await picker.pickImage(
-      source: ImageSource.camera,
-      imageQuality: 90,
+      source: source,
+      imageQuality: 85,
+      maxWidth: 2400,   // cap resolution — reduces size without killing OCR quality
+      maxHeight: 2400,
     );
     if (picked == null) return;
-    final f = File(picked.path);
-    setState(() { _file = f; _fileName = picked.name; _error = null; });
+
+    final f       = File(picked.path);
+    final sizeMb  = await f.length() / (1024 * 1024);
+    if (sizeMb > 10) {
+      if (mounted) setState(() => _error = 'Image is ${sizeMb.toStringAsFixed(1)} MB — max 10 MB. Try a lower resolution.');
+      return;
+    }
+
+    if (mounted) {
+      setState(() {
+        _file      = f;
+        _fileName  = picked.name;
+        _error     = null;
+      });
+    }
   }
 
   Future<void> _run() async {
@@ -129,6 +251,16 @@ class _UploadScreenState extends State<UploadScreen>
     if (uid.isEmpty) {
       setState(() => _error = 'You must be signed in.');
       return;
+    }
+
+    // Validate URL modes before hitting the server
+    if (_mode == 1 || _mode == 2) {
+      final url = _urlCtrl.text.trim();
+      if (!_isValidUrl(url)) {
+        setState(() => _error =
+        'Please enter a valid URL starting with https://');
+        return;
+      }
     }
 
     setState(() {
@@ -176,6 +308,9 @@ class _UploadScreenState extends State<UploadScreen>
         resultId: resultId,
         extractedText: extractedText,
         userId: uid,
+      ).timeout(
+        const Duration(minutes: 3),
+        onTimeout: () => throw 'Request timed out. The AI is taking too long — please retry.',
       );
 
       if (!mounted) return;
@@ -197,6 +332,7 @@ class _UploadScreenState extends State<UploadScreen>
         _processing = false;
         _step = 0;
         _statusMsg = '';
+        if (_mode == 1 || _mode == 2) _urlCtrl.clear();
       });
     }
   }
@@ -204,7 +340,15 @@ class _UploadScreenState extends State<UploadScreen>
   bool get _canRun {
     if (_busy || _isOffline) return false;
     if (_mode == 0 || _mode == 3) return _file != null;
-    return _urlCtrl.text.trim().isNotEmpty;
+    return _isValidUrl(_urlCtrl.text.trim());
+  }
+
+  bool _isValidUrl(String url) {
+    if (url.isEmpty) return false;
+    final uri = Uri.tryParse(url);
+    return uri != null &&
+        (uri.scheme == 'http' || uri.scheme == 'https') &&
+        uri.host.isNotEmpty;
   }
 
   @override
@@ -422,7 +566,7 @@ class _UploadScreenState extends State<UploadScreen>
         child: switch (_mode) {
           0 => _buildFilePicker(),
           1 => _buildUrlField('YouTube URL',
-              'https://youtube.com/watch?v=...', Icons.play_circle_rounded),
+              'https://youtube.com/watch?v=XXXXXXXXXXX  or  https://youtu.be/XXXXX',Icons.play_circle_rounded),
           2 => _buildUrlField('Webpage URL',
               'https://en.wikipedia.org/wiki/...', Icons.language_rounded),
           3 => _buildOcrPicker(),
@@ -549,8 +693,8 @@ class _UploadScreenState extends State<UploadScreen>
                     color: AppColors.textPrimary),
               ),
               const SizedBox(height: 4),
-              Text('PDF or DOCX · Max 10 MB',
-                  style: TextStyle(
+            Text('PDF or DOCX · Max 50 MB',
+            style: TextStyle(
                       fontSize: 12, color: AppColors.textSecond)),
               const SizedBox(height: 16),
               Row(
@@ -621,25 +765,48 @@ class _UploadScreenState extends State<UploadScreen>
           ),
           if (_urlCtrl.text.trim().isNotEmpty) ...[
             const SizedBox(height: 10),
-            Row(children: [
-              Container(
-                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-                decoration: BoxDecoration(
-                  color: AppColors.primaryGlow,
-                  borderRadius: BorderRadius.circular(20),
-                ),
-                child: Row(mainAxisSize: MainAxisSize.min, children: [
-                  Icon(Icons.check_circle_rounded,
-                      size: 11, color: AppColors.primary),
-                  const SizedBox(width: 4),
-                  Text('URL entered',
+            Builder(builder: (_) {
+              final valid = _isValidUrl(_urlCtrl.text.trim());
+              return Row(children: [
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                  decoration: BoxDecoration(
+                    color: valid
+                        ? AppColors.primaryGlow
+                        : AppColors.accentRed.withOpacity(0.10),
+                    borderRadius: BorderRadius.circular(20),
+                    border: Border.all(
+                      color: valid
+                          ? AppColors.primary.withOpacity(0.20)
+                          : AppColors.accentRed.withOpacity(0.30),
+                    ),
+                  ),
+                  child: Row(mainAxisSize: MainAxisSize.min, children: [
+                    Icon(
+                      valid
+                          ? Icons.check_circle_rounded
+                          : Icons.error_outline_rounded,
+                      size: 11,
+                      color: valid ? AppColors.primary : AppColors.accentRed,
+                    ),
+                    const SizedBox(width: 4),
+                    Text(
+                      valid
+                          ? 'URL entered'
+                          : (_mode == 1
+                          ? 'Paste the full YouTube link'
+                          : 'Must start with https://'),
                       style: TextStyle(
                           fontSize: 10,
                           fontWeight: FontWeight.w600,
-                          color: AppColors.primary)),
-                ]),
-              ),
-            ]),
+                          color: valid
+                              ? AppColors.primary
+                              : AppColors.accentRed),
+                    ),
+                  ]),
+                ),
+              ]);
+            }),
           ],
         ],
       ),
@@ -730,7 +897,7 @@ class _UploadScreenState extends State<UploadScreen>
                     fontWeight: FontWeight.w700,
                     color: AppColors.textPrimary)),
             const SizedBox(height: 4),
-            Text('JPEG or PNG · Max 10 MB',
+            Text('JPEG or PNG · Camera or Gallery',
                 style: TextStyle(
                     fontSize: 12, color: AppColors.textSecond)),
           ],
