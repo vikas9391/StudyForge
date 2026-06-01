@@ -3,7 +3,7 @@ apps/results/views.py
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 Self-contained — no external utils needed.
 Inlines:
-  • File extraction  (PDF via PyPDF2/pdfplumber, DOCX via python-docx)
+  • File extraction  (PDF via PyPDF2/pdfplumber/OCR, DOCX via python-docx)
   • AI generation    (summary, quiz, flashcards via HF Inference API)
   • File storage     (local media/ folder, Cloudinary when env vars present)
 
@@ -48,8 +48,8 @@ logger = logging.getLogger(__name__)
 # ① FILE EXTRACTION
 # ═════════════════════════════════════════════════════════════════════════════
 
-MAX_FILE_SIZE_MB = 50   # raised from 10 MB
-MAX_PAGES        = 50   # raised from 20 pages
+MAX_FILE_SIZE_MB  = 50    # raised from 10 MB
+MAX_PAGES         = 50    # raised from 20 pages
 MAX_EXTRACT_CHARS = 15_000  # cap sent to AI
 
 ALLOWED_CONTENT_TYPES = {
@@ -59,16 +59,60 @@ ALLOWED_CONTENT_TYPES = {
 }
 
 
+def _is_low_quality_text(text: str) -> bool:
+    """
+    Returns True when the extracted text is likely garbage — e.g. only
+    repeated author names / watermarks, not real document content.
+
+    Heuristics used:
+      • Fewer than 15 unique words  → almost certainly just header/footer text
+      • Top-1 word accounts for >40% of all word tokens → heavily repetitive
+      • Fewer than 3 sentences      → not enough content to study from
+    """
+    if not text or len(text.strip()) < 100:
+        return True
+
+    words = [w.lower() for w in text.split() if len(w) > 1]
+    if not words:
+        return True
+
+    unique_words = set(words)
+    if len(unique_words) < 15:
+        return True
+
+    from collections import Counter
+    most_common_count = Counter(words).most_common(1)[0][1]
+    if most_common_count / len(words) > 0.40:
+        return True   # one word makes up >40% of the text — repetitive junk
+
+    import re
+    sentences = re.split(r'(?<=[.!?])\s+', text.strip())
+    real_sentences = [s for s in sentences if len(s.split()) >= 5]
+    if len(real_sentences) < 3:
+        return True
+
+    return False
+
+
 def _extract_pdf(file_bytes: bytes) -> str:
     """
-    Try PyPDF2 first; fall back to pdfplumber for scanned/complex PDFs.
-    Returns extracted text or raises ValueError.
+    Extract text from a PDF.
+
+    Strategy (in order):
+      1. PyPDF2  — fast, works for most text-layer PDFs
+      2. pdfplumber — better for complex layouts / tables
+      3. OCR via pdf2image + pytesseract — for image-only / carousel PDFs
+
+    Quality is validated at each step; if the text looks like repetitive
+    header/watermark garbage (_is_low_quality_text), we fall through to
+    the next strategy instead of returning bad content.
     """
-    # ── Attempt 1: PyPDF2 (fast, works for most text PDFs) ───────────────────
+
+    # ── Attempt 1: PyPDF2 ────────────────────────────────────────────────────
     try:
         import PyPDF2
-        reader     = PyPDF2.PdfReader(io.BytesIO(file_bytes))
-        total_pages = len(reader.pages)
+        reader        = PyPDF2.PdfReader(io.BytesIO(file_bytes))
+        total_pages   = len(reader.pages)
         pages_to_read = min(total_pages, MAX_PAGES)
         parts = []
         for i in range(pages_to_read):
@@ -77,12 +121,13 @@ def _extract_pdf(file_bytes: bytes) -> str:
                 parts.append(t)
         text = "\n\n".join(parts).strip()
         logger.info(f"PDF (PyPDF2): {pages_to_read}/{total_pages} pages, {len(text)} chars")
-        if len(text) >= 200:
+        if text and not _is_low_quality_text(text):
             return text
+        logger.info("PDF (PyPDF2): text failed quality check, trying pdfplumber")
     except Exception as e:
         logger.warning(f"PyPDF2 failed: {e}")
 
-    # ── Attempt 2: pdfplumber (handles tables + complex layouts) ─────────────
+    # ── Attempt 2: pdfplumber ────────────────────────────────────────────────
     try:
         import pdfplumber
         parts = []
@@ -93,14 +138,91 @@ def _extract_pdf(file_bytes: bytes) -> str:
                     parts.append(t)
         text = "\n\n".join(parts).strip()
         logger.info(f"PDF (pdfplumber): {len(text)} chars")
-        if len(text) >= 100:
+        if text and not _is_low_quality_text(text):
             return text
+        logger.info("PDF (pdfplumber): text failed quality check, falling back to OCR")
     except Exception as e:
         logger.warning(f"pdfplumber failed: {e}")
 
+    # ── Attempt 3: OCR (pdf2image + pytesseract) ─────────────────────────────
+    # This handles image-only PDFs, carousel/slideshow PDFs, scanned docs, etc.
+    logger.info("PDF: attempting OCR fallback via pdf2image + pytesseract")
+    try:
+        from pdf2image import convert_from_bytes
+        from PIL import Image, ImageFilter, ImageOps
+        import pytesseract
+
+        # Convert PDF pages to images (150 DPI is enough for OCR, keeps memory low)
+        images = convert_from_bytes(
+            file_bytes,
+            dpi=150,
+            first_page=1,
+            last_page=min(MAX_PAGES, 20),  # cap at 20 pages for OCR
+        )
+        logger.info(f"PDF (OCR): converted {len(images)} pages to images")
+
+        ocr_parts = []
+        for page_num, image in enumerate(images, start=1):
+            # Convert to RGB if needed
+            if image.mode not in ("RGB", "L"):
+                image = image.convert("RGB")
+
+            # Fix EXIF rotation just in case
+            try:
+                image = ImageOps.exif_transpose(image)
+            except Exception:
+                pass
+
+            # Greyscale + sharpen improves OCR accuracy
+            grey  = image.convert("L")
+            sharp = grey.filter(ImageFilter.SHARPEN)
+
+            # Auto page segmentation mode — works well for mixed slide content
+            config    = "--psm 3 --oem 3"
+            page_text = pytesseract.image_to_string(sharp, config=config).strip()
+
+            # Fallback per-page: retry with PSM 6 if PSM 3 returned little
+            if len(page_text) < 50:
+                page_text_fb = pytesseract.image_to_string(
+                    sharp, config="--psm 6 --oem 3"
+                ).strip()
+                if len(page_text_fb) > len(page_text):
+                    page_text = page_text_fb
+
+            if page_text:
+                ocr_parts.append(f"[Page {page_num}]\n{page_text}")
+                logger.debug(f"  Page {page_num}: {len(page_text)} chars")
+
+        ocr_text = "\n\n".join(ocr_parts).strip()
+        # Clean up excessive blank lines from OCR output
+        import re as _re
+        ocr_text = _re.sub(r"\n{3,}", "\n\n", ocr_text)
+
+        if ocr_text and not _is_low_quality_text(ocr_text):
+            logger.info(f"PDF (OCR): extracted {len(ocr_text)} chars successfully")
+            return ocr_text
+
+        if ocr_text:
+            # OCR got something but quality is marginal — return it with a warning prefix
+            logger.warning("PDF (OCR): marginal quality, returning with warning")
+            return (
+                "[Note: This PDF appears to be image-based. "
+                "OCR was used and accuracy may vary.]\n\n" + ocr_text
+            )
+
+    except ImportError as e:
+        missing = str(e).split("'")[1] if "'" in str(e) else str(e)
+        logger.warning(
+            f"PDF OCR fallback skipped — '{missing}' not installed. "
+            "Install pdf2image and pytesseract to enable OCR for image PDFs."
+        )
+    except Exception as e:
+        logger.warning(f"PDF OCR fallback failed: {e}")
+
     raise ValueError(
-        "No text could be extracted from this PDF. "
-        "It may be scanned or image-based — use the Scan (OCR) mode instead."
+        "No readable text could be extracted from this PDF. "
+        "It may be a heavily image-based document. "
+        "Try using the Scan (OCR) mode and photograph the key pages instead."
     )
 
 
@@ -326,10 +448,10 @@ def _generate_summary(text: str) -> str:
         result = _hf_post(SUMMARY_MODEL, {
             "inputs": _ai_truncate(text, 3000),
             "parameters": {
-                "max_length": 250,
-                "min_length": 80,
-                "do_sample":  False,
-                "num_beams":  4,        # beam search → more coherent output
+                "max_length":     250,
+                "min_length":     80,
+                "do_sample":      False,
+                "num_beams":      4,        # beam search → more coherent output
                 "length_penalty": 1.2,
             },
         })
@@ -381,11 +503,11 @@ def _generate_quiz(text: str, num_questions: int = 5) -> list[dict]:
         result = _hf_post(INSTRUCT_MODEL, {
             "inputs": prompt,
             "parameters": {
-                "max_new_tokens":   1400,
-                "temperature":      0.25,   # lower = more deterministic
-                "top_p":            0.9,
+                "max_new_tokens":     1400,
+                "temperature":        0.25,   # lower = more deterministic
+                "top_p":              0.9,
                 "repetition_penalty": 1.1,
-                "return_full_text": False,
+                "return_full_text":   False,
             },
         })
         raw = ""
@@ -502,11 +624,11 @@ def _generate_flashcards(text: str, num_cards: int = 8) -> list[dict]:
         result = _hf_post(INSTRUCT_MODEL, {
             "inputs": prompt,
             "parameters": {
-                "max_new_tokens":   1200,
-                "temperature":      0.3,
-                "top_p":            0.9,
+                "max_new_tokens":     1200,
+                "temperature":        0.3,
+                "top_p":              0.9,
                 "repetition_penalty": 1.1,
-                "return_full_text": False,
+                "return_full_text":   False,
             },
         })
         raw = ""
@@ -654,7 +776,7 @@ class ProcessView(APIView):
         # ── Truncate text sent to AI ──────────────────────────────────────────
         ai_text = extracted_text[:MAX_EXTRACT_CHARS]
 
-        errors    = []
+        errors     = []
         summary    = "__pending__"
         quiz       = []
         flashcards = []
