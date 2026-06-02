@@ -13,13 +13,18 @@ All fixes applied:
 import re
 import io
 import urllib.parse
+import os 
 
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated
-from rest_framework.parsers import MultiPartParser, FormParser, JSONParser
+from rest_framework.parsers import MultiPartParser, FormParser
 
 from apps.results.models import Result
+# ADD these 3 lines after "from apps.results.models import Result"
+import pytesseract
+if os.name == 'nt':  # Windows local dev only
+    pytesseract.pytesseract.tesseract_cmd = r'C:\Program Files\Tesseract-OCR\tesseract.exe'
 
 
 MAX_CHARS = 15_000
@@ -134,8 +139,9 @@ class IngestURLView(APIView):
                 {"detail": "Not enough text found on this page. Try a different URL."},
                 status=422,
             )
-
-        title     = soup.title.string.strip() if soup.title else url
+        
+        title = (soup.title.string or "").strip() if soup.title else url
+        title = title or url 
         extracted = _truncate(text)
 
         try:
@@ -358,14 +364,14 @@ class IngestOCRView(APIView):
             if short_side < TARGET_SHORT:
                 scale = TARGET_SHORT / short_side
                 image = image.resize(
-                    (int(w * scale), int(h * scale)), Image.LANCZOS
+                    (int(w * scale), int(h * scale)), Image.Resampling.LANCZOS
                 )
                 w, h = image.size
 
             if long_side > MAX_LONG:
                 scale = MAX_LONG / long_side
                 image = image.resize(
-                    (int(w * scale), int(h * scale)), Image.LANCZOS
+                    (int(w * scale), int(h * scale)), Image.Resampling.LANCZOS
                 )
 
             # ── Greyscale + sharpen — improves OCR on photos of handwritten notes

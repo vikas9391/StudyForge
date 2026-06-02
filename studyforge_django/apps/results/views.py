@@ -27,6 +27,9 @@ from pathlib import Path
 # third-party
 # ─────────────────────────────────────────────────────────────────────────────
 import httpx
+import pytesseract
+if os.name == 'nt':  # Windows local dev only — Render uses /usr/bin/tesseract automatically
+    pytesseract.pytesseract.tesseract_cmd = r'C:\Program Files\Tesseract-OCR\tesseract.exe'
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Django / DRF
@@ -37,7 +40,7 @@ from rest_framework import status
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated
-from rest_framework.parsers import MultiPartParser, FormParser, JSONParser
+from rest_framework.parsers import MultiPartParser, FormParser
 
 from .models import Result
 from .serializers import ResultSerializer, ResultListSerializer
@@ -149,7 +152,7 @@ def _extract_pdf(file_bytes: bytes) -> str:
     logger.info("PDF: attempting OCR fallback via pdf2image + pytesseract")
     try:
         from pdf2image import convert_from_bytes
-        from PIL import Image, ImageFilter, ImageOps
+        from PIL import ImageFilter, ImageOps
         import pytesseract
 
         # Convert PDF pages to images (150 DPI is enough for OCR, keeps memory low)
