@@ -1,6 +1,13 @@
 #!/usr/bin/env bash
 set -e
 
+echo "=== Installing system dependencies ==="
+sudo apt-get update -qq
+sudo apt-get install -y --no-install-recommends \
+    tesseract-ocr \
+    tesseract-ocr-eng \
+    poppler-utils
+
 echo "=== Tesseract version ==="
 tesseract --version
 

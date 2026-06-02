@@ -7,7 +7,3 @@ services:
     envVars:
       - key: PYTHON_VERSION
         value: "3.14.3"
-    packages:
-      - tesseract-ocr
-      - tesseract-ocr-eng
-      - poppler-utils
