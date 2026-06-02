@@ -7,7 +7,7 @@ import 'package:google_sign_in/google_sign_in.dart';
 
 class AuthService {
   static String get _base =>
-      dotenv.env['API_BASE_URL'] ?? 'https://studyforge-api-08xo.onrender.com';
+      dotenv.env['API_BASE_URL'] ?? 'https://studyforge-api-os9b.onrender.com';
 
   static VoidCallback? onSessionChanged;
 
