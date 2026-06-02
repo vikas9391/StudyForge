@@ -3,4 +3,4 @@ set -e
 python manage.py collectstatic --noinput
 python manage.py migrate
 python manage.py create_default_admin
-gunicorn studyforge.wsgi:application --bind 0.0.0.0:$PORT
+gunicorn studyforge.wsgi:application --bind 0.0.0.0:$PORT --timeout 120 --workers 1
