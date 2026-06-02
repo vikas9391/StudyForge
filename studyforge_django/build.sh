@@ -1,6 +1,5 @@
 #!/usr/bin/env bash
-# build.sh — runs on every Render deploy
-set -e  # exit immediately if any command fails
+set -e
 
 echo "=== Installing system dependencies ==="
 apt-get update -qq
@@ -13,13 +12,15 @@ echo "=== Tesseract version ==="
 tesseract --version
 
 echo "=== Installing Python dependencies ==="
-pip install --upgrade pip
 pip install -r requirements.txt
 
 echo "=== Collecting static files ==="
-python manage.py collectstatic --no-input
+python manage.py collectstatic --noinput
 
 echo "=== Running migrations ==="
 python manage.py migrate
+
+echo "=== Creating default admin ==="
+python manage.py create_default_admin
 
 echo "=== Build complete ==="
