@@ -2,8 +2,8 @@
 set -e
 
 echo "=== Installing system dependencies ==="
-sudo apt-get update -qq
-sudo apt-get install -y --no-install-recommends \
+apt-get update -qq
+apt-get install -y --no-install-recommends \
     tesseract-ocr \
     tesseract-ocr-eng \
     poppler-utils
