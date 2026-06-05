@@ -30,6 +30,15 @@ class Result(models.Model):
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
+    STATUS_PENDING    = "pending"
+    STATUS_EXTRACTING = "extracting"
+    STATUS_READY      = "ready"
+    STATUS_FAILED     = "failed"
+    
+    status         = models.CharField(max_length=20, default="pending")
+    extracted_text = models.TextField(blank=True, default="")
+    error_message  = models.TextField(blank=True, default="")
+
     class Meta:
         db_table = "results"
         ordering = ["-created_at"]

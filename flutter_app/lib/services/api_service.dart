@@ -162,27 +162,52 @@ class ApiService {
     required String userId,
   }) async {
     final dio = await _getDio();
-    try {
-      final formData = diolib.FormData.fromMap({
-        'file': await diolib.MultipartFile.fromFile(
-          file.path,
-          filename: file.path.split(Platform.pathSeparator).last,
-        ),
-        'user_id': userId,
-      });
-      final response = await dio.post(
-        '/upload/',
-        data: formData,
-        options: diolib.Options(
-          contentType: 'multipart/form-data',
-          sendTimeout:    const Duration(minutes: 5),  // large PDF upload
-          receiveTimeout: const Duration(minutes: 3),
-        ),
-      );
-      return response.data as Map<String, dynamic>;
-    } on diolib.DioException catch (e) {
-      throw _parseError(e);
+
+    // Step 1: Upload file
+    final formData = diolib.FormData.fromMap({
+      'file': await diolib.MultipartFile.fromFile(
+        file.path,
+        filename: file.path.split(Platform.pathSeparator).last,
+      ),
+      'user_id': userId,
+    });
+
+    final uploadResp = await dio.post(
+      '/upload/',
+      data: formData,
+      options: diolib.Options(
+        contentType: 'multipart/form-data',
+        sendTimeout:    const Duration(minutes: 5),
+        receiveTimeout: const Duration(minutes: 1),
+      ),
+    );
+
+    final uploadData = uploadResp.data as Map<String, dynamic>;
+    final resultId   = uploadData['result_id'] as String?;
+
+    if (resultId == null) throw 'Upload failed: no result_id returned.';
+
+    // Step 2: Poll until OCR is done
+    return await _pollUploadStatus(resultId);
+  }
+
+  Future<Map<String, dynamic>> _pollUploadStatus(String resultId) async {
+    const maxAttempts = 40;  // 40 × 3s = 2 minutes max
+    for (var i = 0; i < maxAttempts; i++) {
+      await Future.delayed(const Duration(seconds: 3));
+      try {
+        final resp = await (await _getDio()).get('/upload/status/$resultId/');
+        final data = resp.data as Map<String, dynamic>;
+        final st   = data['status'] as String? ?? '';
+
+        if (st == 'ready')  return data;
+        if (st == 'failed') throw data['detail'] ?? 'OCR failed.';
+        // still extracting — keep polling
+      } on diolib.DioException catch (e) {
+        throw _parseError(e);
+      }
     }
+    throw 'OCR timed out. Please try a smaller file.';
   }
 
   Future<StudyResult> processDocument({
