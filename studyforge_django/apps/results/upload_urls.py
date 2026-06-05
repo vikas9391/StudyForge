@@ -1,7 +1,6 @@
 from django.urls import path
-from .views import UploadView, UploadStatusView
+from .views import UploadView
 
 urlpatterns = [
-    path("",                        UploadView.as_view()),
-    path("status/<uuid:result_id>/", UploadStatusView.as_view()),
+    path("", UploadView.as_view()),
 ]

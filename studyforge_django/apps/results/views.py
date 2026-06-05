@@ -20,10 +20,8 @@ import re
 import json
 import uuid
 import hashlib
-import threading
 import logging
 from pathlib import Path
-
 
 # ─────────────────────────────────────────────────────────────────────────────
 # third-party
@@ -692,90 +690,67 @@ class UploadView(APIView):
     parser_classes     = [MultiPartParser, FormParser]
 
     def post(self, request):
+        """
+        Step 1 of 2 — upload file, extract text, save pending stub.
+        Returns result_id + extracted_text (pass both to POST /process/).
+        """
         file = request.FILES.get("file")
         if not file:
             return Response({"detail": "No file provided."}, status=400)
 
+        # ── MIME type check ───────────────────────────────────────────────────
         if file.content_type not in ALLOWED_CONTENT_TYPES:
-            return Response({"detail": "Unsupported file type. Upload a PDF or DOCX."}, status=400)
+            return Response(
+                {"detail": "Unsupported file type. Upload a PDF or DOCX."},
+                status=400,
+            )
 
+        # ── Size check (early, before reading full bytes) ─────────────────────
         file_bytes = file.read()
         size_mb    = len(file_bytes) / (1024 * 1024)
         if size_mb > MAX_FILE_SIZE_MB:
-            return Response({"detail": f"File is {size_mb:.1f} MB — max is {MAX_FILE_SIZE_MB} MB."}, status=413)
+            return Response(
+                {"detail": f"File is {size_mb:.1f} MB — max is {MAX_FILE_SIZE_MB} MB."},
+                status=413,
+            )
 
-        # Save file
+        # ── Extract text ──────────────────────────────────────────────────────
+        try:
+            extracted_text = _extract_text(file.name, file_bytes)
+        except ValueError as e:
+            return Response({"detail": str(e)}, status=422)
+
+        # ── Save file ─────────────────────────────────────────────────────────
         try:
             file_url = _save_file(file_bytes, file.name, str(request.user.id))
         except Exception as e:
             logger.error(f"File save failed: {e}")
-            file_url = ""
+            file_url = ""  # non-fatal — processing can still continue
 
-        # Create result with extracting status
-        result = Result.objects.create(
-            user      = request.user,
-            file_url  = file_url,
-            file_name = file.name[:255],
-            summary   = "__pending__",
-            quiz      = [],
-            flashcards= [],
-            status    = Result.STATUS_EXTRACTING,
-        )
-
-        # Run OCR in background thread
-        def run_extraction(result_id, fname, fbytes):
-            try:
-                text = _extract_text(fname, fbytes)
-                Result.objects.filter(id=result_id).update(
-                    status         = Result.STATUS_READY,
-                    extracted_text = text,
-                )
-            except Exception as e:
-                Result.objects.filter(id=result_id).update(
-                    status        = Result.STATUS_FAILED,
-                    error_message = str(e),
-                )
-
-        t = threading.Thread(
-            target=run_extraction,
-            args=(result.id, file.name, file_bytes),
-            daemon=True,
-        )
-        t.start()
+        # ── Save pending result stub ──────────────────────────────────────────
+        try:
+            result = Result.objects.create(
+                user       = request.user,
+                file_url   = file_url,
+                file_name  = file.name[:255],
+                summary    = "__pending__",
+                quiz       = [],
+                flashcards = [],
+            )
+        except Exception as e:
+            return Response(
+                {"detail": f"Could not save result: {e}"},
+                status=500,
+            )
 
         return Response({
-            "result_id": str(result.id),
-            "file_url":  file_url,
-            "status":    Result.STATUS_EXTRACTING,
-            "message":   "File uploaded. Poll GET /upload/status/{id}/ until status is 'ready'.",
+            "result_id":      str(result.id),
+            "file_url":       file_url,
+            "char_count":     len(extracted_text),
+            "extracted_text": extracted_text,
+            "message":        "Uploaded! Call POST /process/ to generate study materials.",
         }, status=status.HTTP_201_CREATED)
 
-
-class UploadStatusView(APIView):
-    permission_classes = [IsAuthenticated]
-
-    def get(self, request, result_id):
-        result = get_object_or_404(Result, id=result_id, user=request.user)
-
-        if result.status == Result.STATUS_READY:
-            return Response({
-                "result_id":      str(result.id),
-                "status":         Result.STATUS_READY,
-                "char_count":     len(result.extracted_text),
-                "extracted_text": result.extracted_text,
-            })
-
-        if result.status == Result.STATUS_FAILED:
-            return Response({
-                "result_id": str(result.id),
-                "status":    Result.STATUS_FAILED,
-                "detail":    result.error_message,
-            }, status=422)
-
-        return Response({
-            "result_id": str(result.id),
-            "status":    result.status,  # "pending" or "extracting"
-        })
 
 # ── POST /process/ ─────────────────────────────────────────────────────────────
 
