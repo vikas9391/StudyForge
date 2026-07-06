@@ -736,6 +736,7 @@ class UploadView(APIView):
                 summary    = "__pending__",
                 quiz       = [],
                 flashcards = [],
+                error_message = "",
             )
         except Exception as e:
             return Response(

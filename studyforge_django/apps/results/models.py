@@ -18,9 +18,12 @@ class Result(models.Model):
     # Stored file (local or cloud)
     file       = models.FileField(upload_to="uploads/%Y/%m/", blank=True, null=True)
 
-    summary    = models.TextField(blank=True, default="")
-    quiz       = models.JSONField(default=list)
-    flashcards = models.JSONField(default=list)
+    summary        = models.TextField(blank=True, default="")
+    quiz           = models.JSONField(default=list)
+    flashcards     = models.JSONField(default=list)
+    error_message  = models.TextField(blank=True, default="")
+    extracted_text = models.TextField(blank=True, default="")
+    status         = models.CharField(max_length=20, default="pending")
 
     # Shared-session fields (replaces Supabase ALTER TABLE)
     is_public   = models.BooleanField(default=False)
